@@ -382,7 +382,11 @@ exercised end to end without anyone owning a server.
 
 ---
 
-## Release notes
+## Changelog
+
+### 1.0.1
+
+- Dropped Node 18 from CI (EOL since April 2025); matrix now tests 20, 22, 24.
 
 ### 1.0.0
 
