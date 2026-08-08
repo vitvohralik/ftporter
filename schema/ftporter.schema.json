@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/vitvohralik/ftporter/main/schema/ftporter.schema.json",
+  "title": "ftporter configuration",
+  "type": "object",
+  "definitions": {
+    "patterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Exact path, directory prefix, or a pattern with * / **. A leading ! negates. A pattern without a slash matches at any depth."
+    },
+    "hook": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Project directory to upload, relative to the config file." },
+        "strategy": { "enum": ["git", "whitelist", "blacklist"], "description": "How the file list is decided." },
+        "include": { "$ref": "#/definitions/patterns" },
+        "exclude": { "$ref": "#/definitions/patterns" },
+        "roots": {
+          "anyOf": [{ "type": "null" }, { "$ref": "#/definitions/patterns" }],
+          "description": "Restrict everything to these subtrees."
+        },
+        "delete": { "type": "boolean" },
+        "deleteCap": { "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
+        "preserveTimestamps": { "type": "boolean" },
+        "chmod": { "anyOf": [{ "type": "null" }, { "type": "string" }, { "type": "integer" }] },
+        "followSymlinks": { "type": "boolean" },
+        "mtimeToleranceMs": { "type": "integer", "minimum": 0 },
+        "stateFile": { "anyOf": [{ "type": "null" }, { "type": "string" }] },
+        "concurrency": {
+          "type": "object",
+          "properties": {
+            "scan": { "type": "integer", "minimum": 1 },
+            "io": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "watch": {
+          "type": "object",
+          "properties": {
+            "debounce": { "anyOf": [{ "type": "integer" }, { "type": "string" }] },
+            "interval": {
+              "anyOf": [{ "type": "null" }, { "type": "integer" }, { "type": "string" }],
+              "description": "Full pass on a timer: 30s, 5m, 1h. Required by the patrol command."
+            },
+            "ignored": { "$ref": "#/definitions/patterns" },
+            "usePolling": { "type": "boolean" },
+            "pollInterval": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "hooks": {
+          "type": "object",
+          "properties": {
+            "beforeSync": { "$ref": "#/definitions/hook" },
+            "afterSync": { "$ref": "#/definitions/hook" },
+            "onError": { "$ref": "#/definitions/hook" }
+          },
+          "additionalProperties": false
+        },
+        "sftp": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "username": { "type": "string" },
+            "remoteRoot": { "type": "string" },
+            "privateKey": { "type": ["string", "null"] },
+            "passphrase": { "type": ["string", "null"] },
+            "password": { "type": ["string", "null"] },
+            "agent": { "type": ["string", "null"] },
+            "readyTimeout": { "type": "integer" },
+            "keepaliveInterval": { "type": "integer" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "allOf": [{ "$ref": "#/definitions/settings" }],
+  "properties": {
+    "$schema": { "type": "string" },
+    "defaultTarget": { "type": ["string", "null"] },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/settings" }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": {
+        "allOf": [{ "$ref": "#/definitions/settings" }],
+        "properties": {
+          "profiles": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/definitions/settings" }
+          }
+        }
+      }
+    }
+  }
+}

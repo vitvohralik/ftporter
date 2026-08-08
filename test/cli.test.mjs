@@ -1,0 +1,115 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { after, describe, it } from 'node:test';
+
+import { makeFixture } from './helpers.mjs';
+
+const exec = promisify(execFile);
+const BIN = path.resolve(import.meta.dirname, '../bin/ftporter.mjs');
+
+/** Runs the real binary and reports the outcome instead of throwing on a non-zero exit. */
+async function cli(args, options = {}) {
+	try {
+		const { stdout, stderr } = await exec(process.execPath, [BIN, ...args], {
+			...options,
+			env: { ...process.env, NO_COLOR: '1', ...options.env },
+		});
+		return { code: 0, stdout, stderr };
+	} catch (err) {
+		return { code: err.code ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
+	}
+}
+
+describe('cli', () => {
+	it('prints help and version without a config', async () => {
+		const help = await cli(['--help']);
+		assert.equal(help.code, 0);
+		assert.match(help.stdout, /Commands/);
+		assert.match(help.stdout, /patrol/);
+
+		const version = await cli(['--version']);
+		assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+$/);
+	});
+
+	it('explains itself when no config can be found', async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), 'ftporter-empty-'));
+		after(() => rm(dir, { recursive: true, force: true }));
+
+		const result = await cli([], { cwd: dir });
+		assert.equal(result.code, 1);
+		assert.match(result.stderr, /no config file found/);
+		assert.match(result.stderr, /ftporter init/);
+	});
+
+	it('writes a config with init and refuses to clobber it', async () => {
+		const dir = await mkdtemp(path.join(tmpdir(), 'ftporter-init-'));
+		after(() => rm(dir, { recursive: true, force: true }));
+
+		const first = await cli(['init'], { cwd: dir });
+		assert.equal(first.code, 0);
+		const file = path.join(dir, 'ftporter.config.jsonc');
+		assert.ok(fs.existsSync(file));
+		assert.match(fs.readFileSync(file, 'utf8'), /"remoteRoot"/);
+
+		const second = await cli(['init'], { cwd: dir });
+		assert.equal(second.code, 1);
+		assert.match(second.stderr, /already exists/);
+		assert.equal((await cli(['init', '--force'], { cwd: dir })).code, 0);
+	});
+
+	it('syncs from the working directory and reports JSON', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a', 'b.txt': 'b' }, config: { strategy: 'blacklist' } });
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		const result = await cli(['--json'], { cwd: fx.local });
+		assert.equal(result.code, 0);
+		const summary = JSON.parse(result.stdout);
+		assert.equal(summary.ok, true);
+		assert.equal(summary.uploaded, 2);
+		assert.deepEqual(fx.remoteList().sort(), ['a.txt', 'b.txt']);
+
+		// A second run from a subdirectory must find the same config by walking up.
+		fs.mkdirSync(path.join(fx.local, 'sub'), { recursive: true });
+		const again = await cli(['status'], { cwd: path.join(fx.local, 'sub') });
+		assert.equal(again.code, 0);
+		assert.match(again.stdout, /up to date/);
+	});
+
+	it('checks a connection with the test command', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		const result = await cli(['test'], { cwd: fx.local });
+		assert.equal(result.code, 0);
+		assert.match(result.stdout, /connected to/);
+		assert.match(result.stdout, /write access to .+ confirmed/);
+	});
+
+	it('prints the resolved config with secrets redacted', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		const result = await cli(['config'], { cwd: fx.local });
+		const printed = JSON.parse(result.stdout);
+		assert.equal(printed.sftp.password, '***');
+		assert.equal(printed.strategy, 'blacklist');
+	});
+
+	it('refuses patrol without an interval', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		const result = await cli(['patrol'], { cwd: fx.local });
+		assert.equal(result.code, 1);
+		assert.match(result.stderr, /patrol needs an interval/);
+	});
+});

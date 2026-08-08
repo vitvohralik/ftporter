@@ -1,0 +1,7 @@
+node_modules/
+.ftporter-state.json
+ftporter.config.json
+ftporter.config.jsonc
+.ftporter.json
+*.log
+.DS_Store

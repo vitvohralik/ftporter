@@ -1,0 +1,51 @@
+{
+  "name": "ftporter",
+  "version": "1.0.0",
+  "description": "Your files' porter — SFTP deploy, watcher and interval patrol.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "repository": { "type": "git", "url": "git+https://github.com/vitvohralik/ftporter.git" },
+  "homepage": "https://github.com/vitvohralik/ftporter#readme",
+  "bugs": "https://github.com/vitvohralik/ftporter/issues",
+  "author": "Vít Vohralík",
+  "keywords": [
+    "sftp",
+    "sync",
+    "deploy",
+    "upload",
+    "watch",
+    "watcher",
+    "mirror",
+    "ssh2",
+    "phpstorm",
+    "deployment"
+  ],
+  "bin": {
+    "ftporter": "bin/ftporter.mjs"
+  },
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "files": [
+    "bin",
+    "src",
+    "schema",
+    "ftporter.config.example.jsonc",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test --test-timeout=30000 test/*.test.mjs",
+    "lint": "node --check bin/ftporter.mjs"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "ssh2": "^1.17.0"
+  }
+}

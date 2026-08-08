@@ -1,0 +1,90 @@
+{
+  // Full reference — every key with its default. Copy the parts you need; only "sftp" is required.
+  // `ftporter init` writes a much shorter starter version of this file.
+  "$schema": "./schema/ftporter.schema.json",
+
+  "root": ".", // project directory to upload, relative to this file
+  "strategy": "git", // git | whitelist | blacklist
+
+  "sftp": {
+    "host": "example.com",
+    "port": 22,
+    "username": "deploy",
+    "remoteRoot": "/var/www/example",
+
+    "privateKey": "~/.ssh/id_rsa", // passphrase-free key, or add "passphrase"
+    "passphrase": "${SSH_KEY_PASSPHRASE}", // read from the environment
+    "password": "${DEPLOY_PASSWORD}", // password auth instead of a key
+    "agent": "${SSH_AUTH_SOCK}", // or let a running ssh-agent answer
+
+    "readyTimeout": 20000,
+    "keepaliveInterval": 10000
+  },
+
+  // Applied on top of every strategy. Exclude always wins over include.
+  // Patterns: exact path · directory prefix ("tests") · "*" (no slash) · "**" (any depth) · "!" negates.
+  // A pattern without a slash floats — "node_modules" matches at any depth, like .gitignore.
+  "include": [],
+  "exclude": [".env", "*.log"],
+
+  // Restrict everything to a subtree, whatever the strategy says.
+  "roots": null,
+
+  "delete": true, // remove server files after they disappear locally
+  "deleteCap": 50, // stop and ask if a run would delete more than this (null disables)
+  "preserveTimestamps": true, // stamp the local mtime onto the uploaded file
+  "chmod": null, // e.g. "644" to set a mode on every uploaded file
+  "followSymlinks": false,
+  "mtimeToleranceMs": 2000,
+
+  "concurrency": {
+    "scan": 64, // parallel readdir calls — scanning is pure latency
+    "io": 8 // parallel uploads/deletes
+  },
+
+  "watch": {
+    "debounce": 300, // collect rapid saves into one batch (ms)
+    "interval": null, // "5m" → also run a full pass on a timer; required by `patrol`
+    "ignored": ["node_modules", "vendor", ".git"],
+    "usePolling": false, // for network drives and containers where events do not arrive
+    "pollInterval": 400
+  },
+
+  // Shell commands (or an array of them) run around a sync. beforeSync failing aborts the run.
+  // Environment: FTPORTER_UPLOADED, FTPORTER_DELETED, FTPORTER_TARGET, FTPORTER_PROFILE, FTPORTER_ROOT.
+  "hooks": {
+    "beforeSync": null,
+    "afterSync": null,
+    "onError": null
+  },
+
+  // Where the upload manifest lives. Default: ~/.local/state/ftporter/<project>-<hash>.json
+  "stateFile": null,
+
+  // Named variants, selected with --profile <name>. Each one overrides the settings above.
+  "profiles": {
+    "assets": {
+      "strategy": "whitelist",
+      "include": ["public/build", "public/css", "public/js"],
+      "deleteCap": 500
+    },
+    "vendor": {
+      "strategy": "whitelist",
+      "include": ["vendor"],
+      "delete": false
+    }
+  },
+
+  // Named servers, selected with --target <name>.
+  "defaultTarget": null,
+  "targets": {
+    "staging": {
+      "sftp": { "host": "staging.example.com", "remoteRoot": "/var/www/staging" }
+    },
+    "prod": {
+      "sftp": { "host": "prod.example.com", "remoteRoot": "/var/www/prod" },
+      "delete": false,
+      "hooks": { "afterSync": "curl -fsS https://example.com/deploy-hook" }
+    }
+  }
+}
