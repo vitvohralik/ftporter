@@ -5,3 +5,4 @@ ftporter.config.jsonc
 .ftporter.json
 *.log
 .DS_Store
+*.tgz

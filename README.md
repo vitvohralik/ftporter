@@ -1,5 +1,11 @@
 # FTPorter
 
+[![npm](https://img.shields.io/npm/v/ftporter?logo=npm&color=cb3837)](https://www.npmjs.com/package/ftporter)
+[![test](https://github.com/vitvohralik/ftporter/actions/workflows/test.yml/badge.svg)](https://github.com/vitvohralik/ftporter/actions/workflows/test.yml)
+[![node](https://img.shields.io/node/v/ftporter?logo=node.js&logoColor=white&color=5fa04e)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/ftporter?color=blue)](LICENSE)
+[![stars](https://img.shields.io/github/stars/vitvohralik/ftporter?logo=github&color=f5c518)](https://github.com/vitvohralik/ftporter/stargazers)
+
 **Your files' porter — SFTP deploy, watcher and interval patrol.**
 
 A porter carries the load *and* keeps an eye on the place. This one carries your project onto the
@@ -7,13 +13,21 @@ server, watches it while you work, and does its rounds on a timer to make sure n
 Install it once, drop a config file into any project, and run it from that directory.
 
 ```bash
-git clone https://github.com/vitvohralik/ftporter && cd ftporter && npm install && npm link
+npm install -g ftporter
 
 cd ~/projects/my-site
 ftporter init      # write a config
 ftporter test      # check the connection
 ftporter watch     # upload on every save
 ```
+
+## Contents
+
+[Why ftporter?](#why-ftporter) · [Design principles](#design-principles) · [Install](#install) ·
+[Quick start](#quick-start) · [Commands](#commands) · [Configuration](#configuration) ·
+[How it works](#how-it-works) · [Programmatic use](#programmatic-use) ·
+[Troubleshooting](#troubleshooting) · [Development](#development) · [Changelog](#changelog) ·
+[License](#license)
 
 ## Why ftporter?
 
@@ -27,7 +41,7 @@ ftporter watch     # upload on every save
 - **Editor-agnostic.** Works the same whether you use VS Code, PhpStorm, Neovim, Zed or anything
   else — it is a standalone tool, not tied to any editor's lifecycle.
 
-## How it works
+## Design principles
 
 Editor deployment (PhpStorm and friends) keeps a local log of what it uploaded and drifts the moment
 anything happens outside the editor. `rsync` is not an option on a host that only speaks SFTP.
@@ -50,26 +64,52 @@ Everything else either uploads the whole tree every time or needs the file list 
 
 ## Install
 
-Distributed from GitHub — there is no npm package yet.
+Requires Node 20+. Install it once, globally — nothing needs to live inside your project except the
+config file.
+
+### From npm — to use it
+
+```bash
+npm install -g ftporter      # puts `ftporter` on your PATH
+```
+
+Update with `npm update -g ftporter`, remove with `npm uninstall -g ftporter`.
+
+Or skip the install altogether and let npx fetch it per run:
+
+```bash
+npx ftporter watch
+```
+
+### From git — to work on it
 
 ```bash
 git clone https://github.com/vitvohralik/ftporter
 cd ftporter
 npm install
-npm link            # puts `ftporter` on your PATH
+npm link            # puts your working copy on your PATH
 ```
 
-Or without cloning, straight from the repository:
+`ftporter` now runs your checkout, edits included. Update with `git pull && npm install`, unhook it
+with `npm unlink -g ftporter`.
 
-```bash
-npm install -g github:vitvohralik/ftporter
+### If npm warns about install scripts
+
+npm 11 holds back dependencies' install scripts until you approve them, so you may see this:
+
+```
+npm warn allow-scripts 2 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   ssh2@1.17.0 (install: node install.js)
+npm warn allow-scripts   cpu-features@0.0.10 (install: ...node-gyp rebuild)
 ```
 
-To update a cloned copy: `git pull && npm install`. To remove it: `npm unlink -g ftporter`.
+**Ignore it — ftporter works fine.** That script builds `cpu-features`, an *optional* dependency of
+ssh2 that picks natively accelerated ciphers for your CPU. Without it ssh2 falls back to the pure JS
+crypto in Node, which costs some throughput on large transfers and nothing else; over SFTP the
+network is the bottleneck anyway.
 
-Requires Node 18.17+. Nothing needs to live inside your project except the config file — the tool
-looks for one in the working directory and every directory above it, so it works from a subdirectory
-of a monorepo too.
+If you do want the acceleration, `npm approve-scripts ssh2 cpu-features` and reinstall. It needs a
+working `node-gyp` toolchain, and if the build fails ssh2 quietly falls back again.
 
 ## Quick start
 
@@ -101,6 +141,10 @@ ftporter test      # can I log in, does the remote root exist, may I write there
 ftporter -n        # what would a sync do?
 ftporter           # do it
 ```
+
+You do not have to run these from the project root: ftporter looks for the config in the working
+directory and every directory above it, so it works just as well from a subdirectory, or from a
+single package inside a monorepo.
 
 Output looks like this:
 
@@ -383,6 +427,14 @@ exercised end to end without anyone owning a server.
 ---
 
 ## Changelog
+
+### 1.1.0
+
+First release published to npm — `npm install -g ftporter`, or `npx ftporter` without installing.
+
+- `engines.node` raised to `>=20`, matching what CI actually tests since 1.0.1. Node 18 has been
+  end of life since April 2025. npm only warns (`EBADENGINE`) rather than refusing to install, so
+  an existing Node 18 setup will most likely keep working — it is simply no longer tested.
 
 ### 1.0.2
 
