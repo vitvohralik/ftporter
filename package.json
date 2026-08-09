@@ -1,6 +1,6 @@
 {
   "name": "ftporter",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Your files' porter — SFTP deploy, watcher and interval patrol.",
   "type": "module",
   "license": "MIT",

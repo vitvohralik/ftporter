@@ -13,6 +13,20 @@ export const color = useColor
 		}
 	: { dim: '', red: '', green: '', yellow: '', cyan: '', bold: '', reset: '' };
 
+// Width of the status line currently on screen. Module scope, not per logger: whoever prints next
+// has to wipe it, and that includes the top-level error handler in bin/, which has no logger.
+let statusWidth = 0;
+
+/** Wipe the live status line, if any. Safe to call from anywhere, including after a throw. */
+export function clearStatus() {
+	if (statusWidth === 0) return;
+	// Erase the whole line where the terminal supports it: the status text is not always the last
+	// thing on it (Ctrl-C makes the shell echo ^C right after it), and padding only covers what we
+	// wrote ourselves. Falls back to blanking our own width on dumb terminals.
+	process.stdout.write(useColor ? '\r\x1b[2K' : `\r${' '.repeat(statusWidth)}\r`);
+	statusWidth = 0;
+}
+
 /**
  * Output with a live status line.
  *
@@ -22,13 +36,6 @@ export const color = useColor
  */
 export function createLogger({ quiet = false, verbose = false } = {}) {
 	const interactive = process.stdout.isTTY && !quiet;
-	let statusWidth = 0;
-
-	const clearStatus = () => {
-		if (statusWidth === 0) return;
-		process.stdout.write(`\r${' '.repeat(statusWidth)}\r`);
-		statusWidth = 0;
-	};
 
 	// Every regular line must wipe the status line first, or it would print on top of it.
 	const line = (msg) => {
@@ -40,7 +47,8 @@ export function createLogger({ quiet = false, verbose = false } = {}) {
 		verbose,
 		status(msg) {
 			if (!interactive) return;
-			process.stdout.write(`\r${' '.repeat(statusWidth)}\r${color.dim}${msg}${color.reset}`);
+			clearStatus();
+			process.stdout.write(`${color.dim}${msg}${color.reset}`);
 			statusWidth = msg.length;
 		},
 		clearStatus,

@@ -26,6 +26,9 @@ export async function runHook(name, config, logger, context = {}) {
 
 	for (const command of [hook].flat()) {
 		if (typeof command === 'function') {
+			// The hook may print; get the status line out of its way first, like logger.dim does
+			// for the spawned variant below.
+			logger.clearStatus();
 			await command({ config, ...context });
 			continue;
 		}

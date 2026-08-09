@@ -384,6 +384,12 @@ exercised end to end without anyone owning a server.
 
 ## Changelog
 
+### 1.0.2
+
+- Fixed output printing on top of the live status line: the top-level error handler (for example
+  `  connecting…ftporter: cannot connect to …` when the handshake times out), anything a function
+  hook prints, and the `^C` the shell echoes when a watch is interrupted.
+
 ### 1.0.1
 
 - Dropped Node 18 from CI (EOL since April 2025); matrix now tests 20, 22, 24.
