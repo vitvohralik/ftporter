@@ -28,6 +28,8 @@ export class SftpSession {
 		this.sftp = null;
 		this.closing = false;
 		this.connecting = null;
+		// null = not asked yet, true/false = what the server answered the first time.
+		this.posixRename = null;
 	}
 
 	static async open(config, logger) {
@@ -123,8 +125,84 @@ export class SftpSession {
 		return this.#call('readdir', this.remotePath(rel));
 	}
 
-	put(rel, localRoot) {
-		return this.#call('fastPut', path.join(localRoot, rel), this.remotePath(rel));
+	/**
+	 * Uploads one file, optionally setting its mode and mtime.
+	 *
+	 * With `atomicUpload` the bytes go to a temporary name next to the target and are renamed over
+	 * it once the file is complete, stamped and chmodded — so the server never serves a half-written
+	 * file, whatever kills the run, and two instances uploading the same path cannot interleave.
+	 * Without it the bytes land straight on the target, which is faster to reason about but leaves
+	 * that window open.
+	 *
+	 * @returns {Promise<{stamped: boolean}>} `stamped` is false when the mtime could not be set —
+	 *   not an upload failure, the file is up there correctly either way.
+	 */
+	async put(rel, localRoot, { chmod = null, mtimeMs = null, replacing = true } = {}) {
+		const source = path.join(localRoot, rel);
+		const target = this.remotePath(rel);
+		if (!this.config.atomicUpload) {
+			await this.#call('fastPut', source, target);
+			if (chmod !== null) await this.#call('chmod', target, chmod);
+			return { stamped: await this.#stamp(target, mtimeMs) };
+		}
+
+		const temp = tempPath(target);
+		try {
+			await this.#call('fastPut', source, temp);
+			if (chmod !== null) await this.#call('chmod', temp, chmod);
+			const stamped = await this.#stamp(temp, mtimeMs);
+			await this.#renameOver(temp, target, replacing);
+			return { stamped };
+		} catch (err) {
+			// Leave nothing behind on the way out. A hard kill still can, which is what `prune` is for.
+			await this.#call('unlink', temp).catch(() => {});
+			throw err;
+		}
+	}
+
+	async #stamp(abs, mtimeMs) {
+		if (mtimeMs === null) return true;
+		const t = Math.floor(mtimeMs / 1000);
+		return this.#call('utimes', abs, t, t).then(
+			() => true,
+			() => false,
+		);
+	}
+
+	/**
+	 * Renames over an existing file.
+	 *
+	 * SFTP v3 `rename` fails when the target exists, so the portable route is unlink-then-rename —
+	 * with a window where the file is missing entirely. OpenSSH's `posix-rename@openssh.com` does it
+	 * in one atomic step and is used whenever the server advertises it.
+	 *
+	 * `replacing` says whether the target was there during the scan. When it was not — the common
+	 * case for a first upload of a big tree — the unlink is skipped, saving a round trip per file;
+	 * if the file turned up in the meantime the rename fails and the slow path runs after all.
+	 */
+	async #renameOver(from, to, replacing) {
+		if (this.#hasPosixRename()) return this.#call('ext_openssh_rename', from, to);
+
+		if (!replacing) {
+			try {
+				return await this.#call('rename', from, to);
+			} catch {
+				// It exists after all — fall through and replace it properly.
+			}
+		}
+		await this.#call('unlink', to).catch(() => {});
+		await this.#call('rename', from, to);
+	}
+
+	/** Asked once per session: the extension list arrives with the SFTP handshake. */
+	#hasPosixRename() {
+		if (this.posixRename === null) {
+			this.posixRename = this.sftp?._extensions?.['posix-rename@openssh.com'] === '1';
+			if (!this.posixRename) {
+				this.logger.trace('server has no posix-rename extension — using unlink + rename');
+			}
+		}
+		return this.posixRename;
 	}
 
 	mkdir(rel) {
@@ -170,6 +248,20 @@ export class SftpSession {
 		this.conn = null;
 		this.sftp = null;
 	}
+}
+
+/**
+ * A sibling of the target, so the rename stays within one filesystem and cannot degrade into a
+ * copy. The pid and a random suffix keep concurrent instances — and repeated runs — apart.
+ */
+export const TEMP_PREFIX = '.ftporter-tmp.';
+
+function tempPath(target) {
+	const slash = target.lastIndexOf('/');
+	const dir = slash === -1 ? '' : target.slice(0, slash + 1);
+	const base = target.slice(slash + 1);
+	const suffix = `${process.pid.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+	return `${dir}${TEMP_PREFIX}${base}.${suffix}`;
 }
 
 const isTransportError = (err) =>

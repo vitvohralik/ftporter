@@ -6,6 +6,7 @@
  *   tests, tests/    directory prefix — matches the directory and everything under it
  *   *.log            `*` matches anything except `/`
  *   docs/ ** /*.md   `**` matches across `/`
+ *   /node_modules    a leading slash anchors to the project root; a leading double-star floats
  *   !keep.log        a leading `!` negates — useful as an exception inside a broad pattern
  */
 
@@ -36,9 +37,22 @@ function compile(patterns) {
 	const floatingLiteral = [];
 
 	for (const raw of patterns) {
-		const pattern = String(raw).replace(/^\.\//, '').replace(/\/+$/, '');
+		let pattern = String(raw).replace(/^\.\//, '').replace(/\/+$/, '');
 		if (!pattern) continue;
-		const floating = !pattern.includes('/');
+
+		// Two spellings everyone brings over from .gitignore. Both used to match nothing at all,
+		// which is the worst way for an exclude to be wrong: `/node_modules` was compared against a
+		// path that never starts with a slash, and `**/node_modules` demanded a slash before it.
+		let anchored = false;
+		if (pattern.startsWith('/')) {
+			pattern = pattern.replace(/^\/+/, '');
+			anchored = true;
+		} else if (pattern.startsWith('**/')) {
+			pattern = pattern.slice(3);
+		}
+		if (!pattern) continue;
+
+		const floating = !anchored && !pattern.includes('/');
 		if (pattern.includes('*')) (floating ? floatingRe : rootedRe).push(globToRegex(pattern));
 		else (floating ? floatingLiteral : rootedLiteral).push(pattern);
 	}

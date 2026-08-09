@@ -23,7 +23,8 @@ ${color.bold}Commands${color.reset}
   watch               Stay running and upload on every save.
   patrol              Stay running and run a full pass on a timer (--interval).
   status              Show what a sync would do, change nothing. ${color.dim}(= sync --dry-run)${color.reset}
-  prune               List files on the server nobody knows about; --force removes them.
+  prune               List files on the server nobody knows about. Lists only until --force;
+                      --temp narrows it to leftovers from interrupted uploads.
   test                Check the connection and the remote root, upload nothing.
   init                Write a commented config file into the current directory.
   config              Print the resolved configuration (secrets redacted).
@@ -40,6 +41,8 @@ ${color.bold}Options${color.reset}
       --include <glob>    Extra path to upload ${color.dim}(repeatable, added to the config)${color.reset}
       --exclude <glob>    Extra path to skip ${color.dim}(repeatable, wins over include)${color.reset}
       --no-delete         Upload only, never delete
+      --no-atomic         Write straight onto the target (faster, unsafe while in use)
+      --temp              With prune: only .ftporter-tmp.* leftovers, anywhere on the server
   -f, --force             Allow a delete count over the cap; confirm prune
       --host/--user/--port/--remote-root/--key   Override the connection for one run
   -v, --verbose           Show timings
@@ -74,6 +77,8 @@ const FLAGS = {
 	'-h': 'help',
 	'--version': 'version',
 	'--no-delete': 'noDelete',
+	'--no-atomic': 'noAtomic',
+	'--temp': 'temp',
 };
 
 const VALUES = {
@@ -110,6 +115,14 @@ export function parseArgs(argv) {
 		if (VALUES[arg]) {
 			const value = argv[++i];
 			if (value === undefined) throw new UserError(`${arg} needs a value`);
+			// Silently keeping the last one turned `-p node -p vendor` into a run against `vendor`
+			// alone, which looks like both were used until the file list says otherwise.
+			if (opts[VALUES[arg]] !== undefined && opts[VALUES[arg]] !== value) {
+				throw new UserError(
+					`${arg} given twice ('${opts[VALUES[arg]]}' and '${value}')`,
+					'Only one can apply — run the command once for each.',
+				);
+			}
 			opts[VALUES[arg]] = value;
 			continue;
 		}
@@ -133,6 +146,7 @@ export function parseArgs(argv) {
 
 	opts.command = command ?? 'sync';
 	if (opts.noDelete) opts.delete = false;
+	if (opts.noAtomic) opts.atomicUpload = false;
 	if (opts.interval !== undefined && parseDuration(opts.interval) === null) {
 		throw new UserError(`invalid --interval '${opts.interval}' (use 30s, 5m, 1h)`);
 	}

@@ -1,6 +1,6 @@
 {
   "name": "ftporter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Your files' porter — SFTP deploy, watcher and interval patrol.",
   "type": "module",
   "license": "MIT",
@@ -41,7 +41,7 @@
   ],
   "scripts": {
     "test": "node --test --test-timeout=30000 test/*.test.mjs",
-    "lint": "node --check bin/ftporter.mjs",
+    "lint": "for f in bin/*.mjs src/*.mjs test/*.mjs; do node --check \"$f\" || exit 1; done",
     "prepublishOnly": "npm test"
   },
   "dependencies": {

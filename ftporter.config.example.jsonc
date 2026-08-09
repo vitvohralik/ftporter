@@ -33,6 +33,8 @@
   "delete": true, // remove server files after they disappear locally
   "deleteCap": 50, // stop and ask if a run would delete more than this (null disables)
   "preserveTimestamps": true, // stamp the local mtime onto the uploaded file
+  "atomicUpload": true, // upload to a temp name and rename it over the target — keeps partial files
+  //                       off the server and makes parallel instances safe
   "chmod": null, // e.g. "644" to set a mode on every uploaded file
   "followSymlinks": false,
   "mtimeToleranceMs": 2000,

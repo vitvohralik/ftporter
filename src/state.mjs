@@ -50,15 +50,64 @@ export function saveManifest(config, local, previous, failed = new Map(), unstam
 		if (keepAll || unstampedSet.has(rel)) files[rel] = [info.size, Math.round(info.mtime)];
 	}
 
-	const state = readState(config.stateFile);
-	state.targets[config.target] ??= {};
-	state.targets[config.target][config.profileName] = {
-		unstamped: [...unstampedSet].filter((rel) => Object.hasOwn(files, rel)),
-		files,
-	};
-
 	fs.mkdirSync(path.dirname(config.stateFile), { recursive: true });
-	fs.writeFileSync(config.stateFile, JSON.stringify(state));
+	withLock(config.stateFile, () => {
+		// Re-read inside the lock: another profile's run may have written its own section since.
+		const state = readState(config.stateFile);
+		state.targets[config.target] ??= {};
+		state.targets[config.target][config.profileName] = {
+			unstamped: [...unstampedSet].filter((rel) => Object.hasOwn(files, rel)),
+			files,
+		};
+		writeAtomic(config.stateFile, JSON.stringify(state));
+	});
+}
+
+/**
+ * One state file holds every profile and target of a project, so two instances running side by side
+ * write to the same path. Both halves of that are handled here: the lock keeps read-modify-write
+ * from losing the other's section, and the rename keeps a reader from ever seeing a partial file.
+ *
+ * Neither is worth failing a sync over — the manifest only bounds deletion, and losing it means
+ * nothing gets deleted until it is rebuilt, never that something gets deleted wrongly.
+ */
+function writeAtomic(file, contents) {
+	const temp = `${file}.${process.pid.toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`;
+	try {
+		fs.writeFileSync(temp, contents);
+		fs.renameSync(temp, file);
+	} catch (err) {
+		fs.rmSync(temp, { force: true });
+		throw err;
+	}
+}
+
+const LOCK_STALE_MS = 30_000;
+
+function withLock(file, fn) {
+	const lock = `${file}.lock`;
+	let held = false;
+	for (let attempt = 0; attempt < 50 && !held; attempt++) {
+		try {
+			fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+			held = true;
+		} catch {
+			// A lock left behind by a killed process would block every later run, so it expires.
+			const age = Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+			if (age > LOCK_STALE_MS) fs.rmSync(lock, { force: true });
+			else sleep(10);
+		}
+	}
+	try {
+		fn();
+	} finally {
+		if (held) fs.rmSync(lock, { force: true });
+	}
+}
+
+/** Blocking on purpose: the critical section is a few milliseconds and callers are not async here. */
+function sleep(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** Merges a partial (watch batch) result into the stored manifest instead of replacing it. */

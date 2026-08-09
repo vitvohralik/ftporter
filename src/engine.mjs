@@ -1,7 +1,8 @@
 import { color } from './logger.mjs';
+import { DEFAULT_IGNORED } from './config.mjs';
 import { matcher } from './match.mjs';
 import { ignoredByGit, scanLocal } from './scan.mjs';
-import { SFTP_NO_SUCH_FILE } from './sftp.mjs';
+import { SFTP_NO_SUCH_FILE, TEMP_PREFIX } from './sftp.mjs';
 import { loadManifest, saveManifest, updateManifest } from './state.mjs';
 import { dirsOf, mapLimit, parentOf, secs, UserError } from './util.mjs';
 
@@ -130,7 +131,7 @@ export function diff(local, remote, manifest, config) {
  *
  * @returns {Promise<{failed: Map<string, string>, unstamped: string[]}>}
  */
-export async function upload(session, config, logger, rels, local, knownDirs) {
+export async function upload(session, config, logger, rels, local, knownDirs, remoteEntries = null) {
 	const failed = new Map();
 	const unstamped = [];
 	const mkdirs = new Map();
@@ -163,15 +164,20 @@ export async function upload(session, config, logger, rels, local, knownDirs) {
 		logger.status(`  upload ${done}/${rels.length}`);
 		try {
 			await ensureDir(parentOf(rel));
-			await session.put(rel, config.root);
-			if (config.chmod !== null) await session.chmod(rel, config.chmod);
+			// The mode and the mtime are set as part of the upload: with atomic uploads they have to
+			// be on the file *before* it is renamed into place, or the server would briefly serve a
+			// finished file with the wrong stamp.
+			const { stamped } = await session.put(rel, config.root, {
+				chmod: config.chmod,
+				mtimeMs: config.preserveTimestamps ? local.get(rel).mtime : null,
+				// Unknown means assume the worst; only a scan that saw the directory can rule it out.
+				replacing: remoteEntries ? remoteEntries.has(rel) : true,
+			});
+			// The file is already up there correctly; a failed stamp is not an upload failure.
+			if (!stamped) unstamped.push(rel);
 		} catch (err) {
 			failed.set(rel, err.message);
 			return;
-		}
-		// The file is already up there correctly; a failed stamp is not an upload failure.
-		if (config.preserveTimestamps) {
-			await session.utimes(rel, local.get(rel).mtime).catch(() => unstamped.push(rel));
 		}
 
 		done += 1;
@@ -276,7 +282,7 @@ export async function reconcile(session, config, logger, opts = {}) {
 		return { ...base, uploaded: 0, deleted: 0, failed: 0, ms, upToDate: false };
 	}
 
-	const uploaded = await upload(session, config, logger, uploads, local, remote.dirs);
+	const uploaded = await upload(session, config, logger, uploads, local, remote.dirs, remote.entries);
 	const removeFailed = deletes.length ? await remove(session, config, logger, deletes) : new Map();
 	const failed = new Map([...uploaded.failed, ...removeFailed]);
 
@@ -323,7 +329,7 @@ export async function reconcilePaths(session, config, logger, batch) {
 	for (const rel of stale) logger.warn(`${rel}: changed on the server, not deleting`);
 	if (uploads.length === 0 && deletes.length === 0) return { uploaded: 0, deleted: 0, failed: 0 };
 
-	const uploaded = await upload(session, config, logger, uploads, local, remote.dirs);
+	const uploaded = await upload(session, config, logger, uploads, local, remote.dirs, remote.entries);
 	const removeFailed = deletes.length ? await remove(session, config, logger, deletes) : new Map();
 	const failed = new Map([...uploaded.failed, ...removeFailed]);
 
@@ -352,29 +358,73 @@ export async function reconcilePaths(session, config, logger, batch) {
  * an explicit --force.
  */
 export async function prune(session, config, logger, opts = {}) {
-	const local = scanLocal(config, logger);
-	const manifest = loadManifest(config, logger);
-	const found = await walkRemote(session, config, logger);
-
-	const orphans = found.filter((rel) => !local.has(rel) && !Object.hasOwn(manifest.files, rel)).sort();
+	const orphans = opts.temp ? await findTemps(session, config, logger) : await findOrphans(session, config, logger);
+	const what = opts.temp ? 'leftover temporary files' : 'orphans';
 
 	if (orphans.length === 0) {
-		logger.ok('no orphans on the server');
+		logger.ok(opts.temp ? 'no leftover temporary files on the server' : 'no orphans on the server');
 		return { orphans: [], deleted: 0 };
 	}
 	for (const rel of orphans) logger.log(`  ? ${rel}`);
 
 	if (!opts.force || opts.dryRun) {
-		logger.dim(`  ${orphans.length} files on the server that neither the local project nor the manifest knows about`);
-		logger.dim('  Review the list, then remove them with: ftporter prune --force');
+		logger.dim(
+			opts.temp
+				? `  ${orphans.length} files left behind by an interrupted upload`
+				: `  ${orphans.length} files on the server that neither the local project nor the manifest knows about`,
+		);
+		logger.dim(`  Review the list, then remove them with: ftporter prune ${opts.temp ? '--temp ' : ''}--force`);
 		return { orphans, deleted: 0 };
 	}
 
 	const failed = await remove(session, config, logger, orphans);
 	for (const [rel, err] of failed) logger.warn(`${rel}: ${err}`);
 	const deleted = orphans.length - failed.size;
-	logger.ok(`${deleted} orphans deleted`);
+	logger.ok(`${deleted} ${what} deleted`);
 	return { orphans, deleted };
+}
+
+async function findOrphans(session, config, logger) {
+	const local = scanLocal(config, logger);
+	const manifest = loadManifest(config, logger);
+	const found = await walkRemote(session, config, logger, { from: ownedSubtrees(config, logger) });
+	return found.filter((rel) => !local.has(rel) && !Object.hasOwn(manifest.files, rel)).sort();
+}
+
+/**
+ * Which parts of the server this run is entitled to judge.
+ *
+ * Prune calls everything it finds and does not recognise an orphan, and what it recognises is
+ * whatever the *current* profile uploads. Walking the whole tree under `--profile vendor` therefore
+ * reports the entire rest of the site as junk — true to the letter, useless in practice, and one
+ * `--force` away from deleting the site. A profile that names its own subtrees (`roots`, or a
+ * whitelist `include` of plain directories) is taken at its word and the walk starts there instead.
+ *
+ * Anything with a glob in it, or a strategy that spans the project, keeps the full walk: those
+ * really do own the whole tree.
+ */
+function ownedSubtrees(config, logger) {
+	const named = config.roots?.length ? config.roots : config.strategy === 'whitelist' ? config.include : [];
+	const dirs = named.filter((p) => p && !p.startsWith('!') && !p.includes('*')).map((p) => p.replace(/\/+$/, ''));
+
+	if (dirs.length === 0 || dirs.length !== named.length) return [''];
+	if (config.profileName !== 'default') {
+		logger.dim(`  scope ${config.label}: ${dirs.join(', ')}`);
+	}
+	return dirs;
+}
+
+/**
+ * Leftovers from an upload that was killed between writing the temporary file and renaming it.
+ *
+ * These need none of the care the orphan hunt does: the name says the file is ours and that no
+ * finished upload is using it, so the whole server can be walked — past `pruneSkip`, past what
+ * .gitignore hides — and nothing else can ever be picked up. That matters because a `vendor` or
+ * `node_modules` profile uploads into exactly the directories the ordinary walk refuses to enter.
+ */
+async function findTemps(session, config, logger) {
+	const found = await walkRemote(session, config, logger, { everywhere: true });
+	return found.filter((rel) => rel.slice(rel.lastIndexOf('/') + 1).startsWith(TEMP_PREFIX)).sort();
 }
 
 /**
@@ -384,11 +434,18 @@ export async function prune(session, config, logger, opts = {}) {
  *
  * Excluded directories are not descended into, and with the git strategy anything .gitignore would
  * hide is skipped too — that is what protects the server's own build output and .env.
+ *
+ * `from` limits which subtrees are entered at all; see `ownedSubtrees`.
  */
-async function walkRemote(session, config, logger) {
-	const isExcluded = matcher([...config.exclude, ...(config.pruneSkip ?? ['.git', 'node_modules', 'vendor'])]);
+async function walkRemote(session, config, logger, { everywhere = false, from = [''] } = {}) {
+	// The walk covers what the strategy could have uploaded, and nothing else: `exclude` is out of
+	// scope by definition, and `DEFAULT_IGNORED` (`.git`, editor directories, the config file) is
+	// what no strategy ever uploads under any setting. `pruneSkip` is there to skip more on top —
+	// a tree too big to be worth walking — not to define the scope.
+	const skip = [...config.exclude, ...(config.pruneSkip ?? DEFAULT_IGNORED)];
+	const isExcluded = everywhere ? () => false : matcher(skip);
 	const files = [];
-	let level = [''];
+	let level = from;
 	let scanned = 0;
 
 	while (level.length > 0) {
@@ -408,7 +465,8 @@ async function walkRemote(session, config, logger) {
 		});
 
 		// One `git check-ignore` call per level instead of one per file.
-		const ignored = config.strategy === 'git' ? ignoredByGit(config.root, [...found.keys()]) : new Set();
+		const ignored =
+			config.strategy === 'git' && !everywhere ? ignoredByGit(config.root, [...found.keys()]) : new Set();
 		const next = [];
 		for (const [rel, isDir] of found) {
 			if (ignored.has(rel)) continue;

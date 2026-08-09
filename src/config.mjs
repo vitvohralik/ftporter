@@ -31,6 +31,7 @@ export const DEFAULTS = {
 	delete: true,
 	deleteCap: 50,
 	preserveTimestamps: true,
+	atomicUpload: true,
 	chmod: null,
 	followSymlinks: false,
 	mtimeToleranceMs: 2000,
@@ -262,6 +263,7 @@ function cliOverrides(cli) {
 	if (cli.strategy) out.strategy = cli.strategy;
 	if (cli.delete === false) out.delete = false;
 	if (cli.delete === true) out.delete = true;
+	if (cli.atomicUpload === false) out.atomicUpload = false;
 	if (cli.interval) out.watch = { interval: cli.interval };
 	return out;
 }

@@ -30,6 +30,8 @@
         "delete": { "type": "boolean" },
         "deleteCap": { "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
         "preserveTimestamps": { "type": "boolean" },
+        "atomicUpload": { "type": "boolean" },
+        "pruneSkip": { "type": "array", "items": { "type": "string" } },
         "chmod": { "anyOf": [{ "type": "null" }, { "type": "string" }, { "type": "integer" }] },
         "followSymlinks": { "type": "boolean" },
         "mtimeToleranceMs": { "type": "integer", "minimum": 0 },

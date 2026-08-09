@@ -40,6 +40,9 @@ ftporter watch     # upload on every save
   `ftporter` does a one-shot sync. No plugins, no GUI, no surprises.
 - **Editor-agnostic.** Works the same whether you use VS Code, PhpStorm, Neovim, Zed or anything
   else — it is a standalone tool, not tied to any editor's lifecycle.
+- **It never serves half a file.** Uploads land under a temporary name and are renamed into place,
+  so a dropped connection or a Ctrl-C cannot leave a truncated bundle live on the site — and several
+  instances can run side by side without fighting over the same file.
 
 ## Design principles
 
@@ -167,6 +170,7 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `ftporter patrol` | Stay running, full pass on a timer (`--interval 5m`). |
 | `ftporter status` | What a sync would do. Changes nothing. |
 | `ftporter prune` | List server files nobody knows about; `--force` removes them. |
+| `ftporter prune --temp` | List only leftovers from interrupted uploads, anywhere on the server. |
 | `ftporter test` | Connection, remote root and write access. Uploads nothing. |
 | `ftporter init` | Write a commented config into the current directory. |
 | `ftporter config` | Print the fully resolved configuration, secrets redacted. |
@@ -186,6 +190,8 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `--include <glob>` | Extra path to upload (repeatable, added to the config) |
 | `--exclude <glob>` | Extra path to skip (repeatable, wins over include) |
 | `--no-delete` | Upload only, never delete |
+| `--no-atomic` | Write straight onto the target instead of renaming a temp file into place |
+| `--temp` | With `prune`: only `.ftporter-tmp.*` leftovers, ignoring `pruneSkip` and .gitignore |
 | `-f, --force` | Allow a delete count over the cap; confirm `prune` |
 | `--host` `--user` `--port` `--remote-root` `--key` | Override the connection for one run |
 | `-v, --verbose` / `-q, --quiet` / `--json` | Output control |
@@ -267,11 +273,13 @@ Pattern syntax:
 | `tests` or `tests/` | that directory and everything under it |
 | `*.log` | `*` matches anything except `/` |
 | `src/**/*.map` | `**` crosses directories |
+| `/node_modules` | a leading `/` pins it to the project root only |
 | `!keep.log` | a leading `!` carves out an exception |
 
 A pattern **containing a slash is anchored** at the project root; a pattern **without one floats**,
 the way `.gitignore` behaves — `node_modules` matches at any depth, `*.log` matches a log file
-anywhere.
+anywhere. A leading `/` anchors, a leading `**/` floats, so the spellings you already have in
+`.gitignore` can be pasted straight in.
 
 `"roots": ["public/build"]` narrows everything to a subtree, whatever the strategy says.
 
@@ -341,6 +349,7 @@ the others only warn.
 | --- | --- | --- |
 | `root` | `"."` | Project directory to upload, relative to the config file |
 | `preserveTimestamps` | `true` | Stamp the local mtime onto the uploaded file |
+| `atomicUpload` | `true` | Upload to a temporary name and rename it over the target — see below |
 | `chmod` | `null` | e.g. `"644"` to set a mode on every uploaded file |
 | `followSymlinks` | `false` | Upload the target of a symlink instead of skipping it |
 | `concurrency.scan` | `64` | Parallel `readdir` calls |
@@ -350,7 +359,28 @@ the others only warn.
 | `watch.ignored` | `["node_modules", "vendor", ".git"]` | Directories the watcher never looks into |
 | `watch.usePolling` | `false` | For network drives and containers where events do not arrive |
 | `mtimeToleranceMs` | `2000` | How far apart two timestamps may be and still count as equal |
+| `pruneSkip` | `.git`, editor dirs, config files | Extra directories `prune` never walks into |
 | `stateFile` | `null` | Where the manifest lives |
+
+### Atomic uploads
+
+By default the bytes do not go to the file you are replacing. They go to a temporary name next to
+it, get their mode and mtime, and are renamed over the target only once complete — the same thing
+rsync does by default, and the reason it has an `--inplace` flag to turn it off.
+
+> **This is what makes several instances safe to run at once.** A `watch` on one profile and a
+> manual run on another cannot interleave their writes, even where both cover the same file. With
+> `"atomicUpload": false` they can, and an interrupted upload leaves a truncated file live on the
+> server.
+
+Reasons to turn it off anyway:
+
+- **Nothing reads the server while you upload** — a personal staging box, a bulk import. Then the
+  protection buys nothing and costs a round trip per file. Prefer `--no-atomic` on the one run.
+- **The rename replaces the file**, so ACLs, owner or group set on the old file are lost.
+- **It needs room for both copies**, and write permission on the directory rather than the file.
+
+[How it is done, and what it costs](#atomic-uploads-in-detail) has the mechanics and the numbers.
 
 ## How it works
 
@@ -373,6 +403,51 @@ still work, but the kernel refuses `utimes`, so their remote mtime stays at uplo
 make them look changed forever. Those are recorded as `unstamped` and compared against the manifest
 instead — reported as `13x could not set mtime (file owned by another user)`.
 
+### Atomic uploads in detail
+
+Where the server offers OpenSSH's `posix-rename@openssh.com` extension, replacing the file is a
+single atomic operation. Everywhere else the fallback is unlink-then-rename, which leaves a
+millisecond-wide window where the file is missing rather than incomplete — still far better than
+writing over a live one. A file the scan did not find on the server skips the unlink entirely, which
+is the bulk-import case.
+
+The temporary file is per file, not per tree: it lives for the length of one transfer and is renamed
+the moment that file is complete. A whole `vendor/` is never duplicated — the extra space at any
+instant is one temp file per parallel upload, eight by default.
+
+The cost is one round trip per uploaded file, which only shows up on a link with latency. Measured
+over 800 small files at 20 ms RTT with the default concurrency of 8:
+
+| | direct | atomic |
+| --- | --- | --- |
+| first upload (files not on the server yet) | 5.7 s | 8.2 s |
+| replacing existing files, with `posix-rename` | 6.2 s | 9.0 s |
+| replacing existing files, without it | 6.2 s | 11.4 s |
+
+Roughly 1.4× on a normal OpenSSH server, 1.8× on one without the extension when overwriting. A run
+that uploads nothing costs nothing extra: the price is per uploaded file, not per scanned one.
+
+**Turning it off for `vendor` or `node_modules`.** Sensible when those trees only ever go to a box
+nobody is browsing while you upload — the guarantee protects against something that cannot happen
+there, and you keep the 40%. On a server other people or cron jobs use, keep it on: those trees are
+read by the application at runtime, so a truncated file is a fatal error rather than a broken asset.
+
+Either way an interrupted upload is not permanent. The next run compares sizes against the server,
+finds the short file and replaces it — a fresh mtime on the truncated file does not fool it.
+
+A hard kill can leave temporary files (`.ftporter-tmp.*`) behind:
+
+```bash
+ftporter prune --temp            # what is left over
+ftporter prune --temp --force    # remove it
+```
+
+This is a different question from the orphan hunt, and a safer one: the name proves the file is
+ftporter's own and that no finished upload is using it. So the walk covers the whole server — past
+`exclude` and .gitignore, which is where a `vendor` or `node_modules` profile puts its files — while
+never touching anything without that prefix. It needs no matching profile and cannot take a real
+file with it.
+
 ### `prune` — files from before
 
 Files removed locally *before* this tool was in place stayed on the server, and the manifest knows
@@ -383,11 +458,35 @@ ftporter prune            # list only
 ftporter prune --force    # and remove them
 ```
 
-Unlike a normal run this walks the entire server tree — otherwise a directory deleted locally along
-with its contents could never be found, which is the whole point. Symlinks are never followed or
-offered, `exclude` is honoured, and under the git strategy anything `.gitignore` would hide is
-skipped, which is what protects the server's build output and `.env`. It deliberately does not
-delete on its own: the list needs human eyes before `--force`.
+Prune never deletes without `--force`, so `-n` adds nothing here — unlike a normal run, where it is
+what holds the upload back.
+
+Unlike a normal run, this walks the server itself instead of starting from the local file list —
+otherwise a directory deleted locally along with its contents could never be found, which is the
+whole point. Symlinks are never followed or offered, `exclude` is honoured, and under the git
+strategy anything `.gitignore` would hide is skipped, which is what protects the server's build
+output and `.env`.
+
+**Prune looks exactly where the current run uploads, and nowhere else.** Whatever the strategy,
+`include` and `exclude` decide to upload is what it walks — so a `git` run ignores what `.gitignore`
+ignores, and a whitelist profile that names directories is walked inside those:
+
+```bash
+ftporter prune               # the site: strays like vendor-bin/ or an old vendor.bak/
+ftporter prune -p vendor     # inside vendor/ only: packages the project has dropped
+ftporter prune -p assets     # inside the asset dirs only
+```
+
+Passing two profiles (`-p a -p b`) is refused rather than silently using the last one.
+
+Nothing outside that scope is ever called junk, and nothing needs a second list to protect it: if
+`.gitignore` or `exclude` keeps `node_modules` out of your uploads, prune does not look there either,
+and if a profile does upload it, prune audits it like anything else. `pruneSkip` exists only to skip
+*more* on top — a tree too large to be worth walking — and defaults to the handful of paths no
+strategy ever uploads (`.git`, editor directories, the config file).
+
+One thing to watch: a directory is only out of scope under the exact name that excludes it. `vendor`
+is left alone, while `vendor.bak` is a stranger like any other and will be offered for deletion.
 
 ## Programmatic use
 
@@ -427,6 +526,30 @@ exercised end to end without anyone owning a server.
 ---
 
 ## Changelog
+
+### 1.2.0
+
+- **Atomic uploads**, on by default. A file is uploaded to a temporary name next to the target,
+  given its mode and mtime, and renamed into place — using OpenSSH's `posix-rename@openssh.com`
+  where the server has it, unlink-then-rename everywhere else. An interrupted run can no longer
+  leave a truncated file live on the server, and several instances may now run side by side even
+  when they cover the same files. Set `"atomicUpload": false` for the old behaviour.
+- **The state file is written atomically and under a lock**, so instances sharing a project no
+  longer risk losing each other's manifest section or reading a half-written file.
+- **`--no-atomic`** turns the temporary file off for a single run, for bulk imports where nothing is
+  reading the server yet.
+- **`ftporter prune --temp`** clears leftovers from interrupted uploads. It walks past `pruneSkip`
+  and .gitignore — so it also reaches inside `vendor` and `node_modules` — and removes nothing but
+  ftporter's own `.ftporter-tmp.*` files.
+- **`prune` now looks exactly where the strategy uploads, and nowhere else.** It used to walk the
+  whole server whatever profile was running, so `-p vendor` reported the entire rest of the site as
+  orphaned — one `--force` away from deleting it. A whitelist profile is now walked inside its own
+  directories, and `pruneSkip` no longer hides `node_modules` and `vendor` from a run that uploads
+  them: what `.gitignore` and `exclude` already keep out of scope was doing that job anyway.
+- **A repeated `-p`/`-t`/`--root` is now an error** instead of quietly keeping the last one.
+- **Fixed `/node_modules` and `**/node_modules` matching nothing** in `include`, `exclude` and
+  `watch.ignored`. Both are everyday .gitignore spellings, and a pattern that silently matches
+  nothing is the worst way for an exclude to be wrong.
 
 ### 1.1.0
 
