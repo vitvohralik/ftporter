@@ -546,6 +546,12 @@ export const CONFIG_TEMPLATE = `{
   "delete": true,
   "deleteCap": 50,
 
+  // Upload to a temporary name and rename it over the target once the file is complete, so the
+  // server never serves a half-written file and two instances cannot interleave. Stated here
+  // rather than left to the default because it is worth knowing you have it before you turn it
+  // off: false is faster on a first bulk import, and unsafe on a site that is being served.
+  "atomicUpload": true,
+
   "watch": {
     "debounce": 300,
     // Set to e.g. "5m" to also run a full pass on a timer (\`ftporter patrol\`).

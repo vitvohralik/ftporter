@@ -532,6 +532,9 @@ Reasons to turn it off anyway:
 - **The rename replaces the file**, so ACLs, owner or group set on the old file are lost.
 - **It needs room for both copies**, and write permission on the directory rather than the file.
 
+`ftporter init` writes `"atomicUpload": true` into the generated config rather than leaving it to
+the default — worth knowing you have it before you decide to turn it off.
+
 [How it is done, and what it costs](#atomic-uploads-in-detail) has the mechanics and the numbers.
 
 ## How it works

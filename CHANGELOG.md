@@ -76,6 +76,9 @@ untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter
 - `W` and `I` — the two keys whose answer keeps running after you let go of it — turn green in the
   key bar while they are on, key included, so it survives a bar too narrow to show the labels.
 
+- `ftporter init` now states `atomicUpload: true` in the generated config, rather than leaving it
+  to the default: it is worth knowing you have it before you decide to turn it off.
+
 ### 1.2.0
 
 - **Atomic uploads**, on by default. A file is uploaded to a temporary name next to the target,
