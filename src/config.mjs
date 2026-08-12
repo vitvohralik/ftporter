@@ -84,7 +84,6 @@ export const DEFAULTS = {
 		agent: null,
 		readyTimeout: 20_000,
 		keepaliveInterval: 10_000,
-		strictHostKey: false,
 		// FTP only.
 		rejectUnauthorized: true,
 		connections: 4,

@@ -81,6 +81,14 @@ untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter
 - **Fixed `--include=<glob>` and `--exclude=<glob>`** coming back as `unknown option`. Those two
   were read before the `--name=value` form was, so only the separate-argument spelling reached
   them — for the pair whose whole job is to be written the way `.gitignore` writes them.
+- **`ftporter config` prints the connection under `"server"`**, with the protocol inside it, instead
+  of the internal `connection` name it happens to carry in memory. In 1.x the two matched by
+  accident, so the output could be read against the file and pasted back into one; renaming the
+  block was about to quietly end that. `targets` and `profiles` are still left out — they are the
+  alternatives to this run, and the chosen one is already resolved into everything above.
+- Dropped `strictHostKey`, a connection setting that has never been read by anything. It was not in
+  the schema either, so writing it was an editor error and a no-op at once — it only ever showed up
+  in `ftporter config` output, looking like a knob.
 - **Fixed `--name=value` skipping the repeated-option check**, so `-t prod --target=staging` quietly
   ran against `staging` alone. Both spellings now meet the same rules, and a repeat is the error it
   has been since 1.2.0. A value attached to a flag that takes none (`--dry-run=true`) says so

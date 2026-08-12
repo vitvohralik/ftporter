@@ -200,7 +200,7 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `ftporter prune --temp` | List only leftovers from interrupted uploads, anywhere on the server. |
 | `ftporter test` | Connection, remote root and write access. Uploads nothing. |
 | `ftporter init` | Write a commented config into the current directory. |
-| `ftporter config` | Print the fully resolved configuration, secrets redacted. |
+| `ftporter config` | Print the fully resolved configuration, secrets redacted, in the shape a config file is written in. |
 
 ### Options
 

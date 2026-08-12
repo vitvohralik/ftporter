@@ -164,9 +164,27 @@ describe('cli', () => {
 
 		const result = await cli(['config'], { cwd: fx.local });
 		const printed = JSON.parse(result.stdout);
-		assert.equal(printed.connection.password, '***');
-		assert.equal(printed.protocol, 'sftp');
+		assert.equal(printed.server.password, '***');
 		assert.equal(printed.strategy, 'blacklist');
+	});
+
+	it('prints the connection the way a config file writes it', async () => {
+		// Internally the block is `connection` with the protocol beside it; printing it under that
+		// name would show a shape no config file may use, and 1.x — where the internal name happened
+		// to match the file's — printed something you could paste straight back.
+		const fx = await makeFixture({ files: { 'a.txt': 'a' } });
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		const result = await cli(['config'], { cwd: fx.local });
+		const printed = JSON.parse(result.stdout);
+
+		assert.equal(printed.connection, undefined, 'the internal name does not leak');
+		assert.equal(printed.protocol, undefined, 'the protocol lives inside the block, as in the file');
+		assert.equal(printed.server.protocol, 'sftp');
+		assert.equal(printed.server.host, '127.0.0.1');
+		assert.equal(printed.targets, undefined, 'the alternatives to this run are not part of it');
+		assert.equal(printed.profiles, undefined);
 	});
 
 	it('refuses patrol without an interval', async () => {

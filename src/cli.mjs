@@ -342,18 +342,37 @@ function initConfig(opts) {
 	return 0;
 }
 
+/**
+ * The configuration this run actually uses, printed in the shape a config file is written in.
+ *
+ * Internally the connection block is called `connection` and the protocol sits beside it; both are
+ * put back the way the file spells them — `"server": { "protocol": … }` — so what comes out can be
+ * read against what went in, and pasted back into a file if it is worth keeping. `targets` and
+ * `profiles` are dropped: they are the alternatives to this run, and one of them is already
+ * resolved into everything above.
+ *
+ * The rest is genuinely resolved rather than copied — `root`, `stateFile` and `configFile` are
+ * absolute, `target` is where this run points, and `label`, `targetName`, `profileName`,
+ * `knownTargets` and `knownProfiles` say which of the file's variants it picked.
+ */
 function printConfig(config) {
-	const redacted = {
-		...config,
-		connection: {
-			...config.connection,
-			password: config.connection.password ? '***' : null,
-			passphrase: config.connection.passphrase ? '***' : null,
-		},
+	const server = {
+		protocol: config.protocol,
+		...config.connection,
+		password: config.connection.password ? '***' : null,
+		passphrase: config.connection.passphrase ? '***' : null,
 	};
-	delete redacted.profiles;
-	delete redacted.targets;
-	console.log(JSON.stringify(redacted, null, 2));
+
+	// Rebuilt key by key so `server` keeps the place `connection` had, rather than being appended
+	// after the resolved-run fields and reading as an afterthought.
+	const printed = Object.fromEntries(
+		Object.entries(config).flatMap(([key, value]) => {
+			if (key === 'protocol' || key === 'profiles' || key === 'targets') return [];
+			return [key === 'connection' ? ['server', server] : [key, value]];
+		}),
+	);
+
+	console.log(JSON.stringify(printed, null, 2));
 	return 0;
 }
 
