@@ -64,11 +64,18 @@ untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter
 - For anyone building on this: `createWatcher` is exported from `src/watch.mjs`, and a resolved
   config now carries `knownTargets` and `knownProfiles` — the names `T` and `P` offer, which are
   otherwise stripped out of every resolved layer.
-
 - **`ftporter list [path]`** (and **`l`** in the session) — see a directory on the server as it
   actually is, with sizes and modification times, directories first. No diff, no manifest, nothing
   changed. A relative path is taken from the remote root, a leading `/` addresses the server
   absolutely, and `--json` prints the entries instead.
+- **A server that keeps no modification times now says so out loud**, when it connects and again
+  before the pass that this actually explains. Such a server plus an empty manifest leaves nothing
+  to compare against, so a tree that is already correct looks entirely changed — and "51 files to
+  upload" on a site you believe is current is alarming until something says why. It happens once:
+  from the second pass on, the manifest makes the comparison exact.
+- `W` and `I` — the two keys whose answer keeps running after you let go of it — turn green in the
+  key bar while they are on, key included, so it survives a bar too narrow to show the labels.
+
 ### 1.2.0
 
 - **Atomic uploads**, on by default. A file is uploaded to a temporary name next to the target,

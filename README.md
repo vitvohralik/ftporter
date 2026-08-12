@@ -300,8 +300,8 @@ scrollable log — the same lines `ftporter sync` prints — not a redrawn scree
 | --- | --- |
 | `S` | Sync: one full pass, exactly what `ftporter sync` does. |
 | `n` | Dry run: what a sync would do, changing nothing. |
-| `W` | Watch on/off. On, every save goes up. |
-| `I` | Patrol on/off. Asks how often, starting from whatever `watch.interval` says. |
+| `W` | Watch on/off. On, every save goes up. Green in the bar while it is on. |
+| `I` | Patrol on/off. Asks how often, starting from `watch.interval`. Green while on. |
 | `l` | List a directory on the server, starting from wherever it looked last. |
 | `p` | Prune: list the files nobody knows about. |
 | `T` `P` | Pick a target or a profile from a list. Shown only when there is more than one. |
@@ -309,7 +309,8 @@ scrollable log — the same lines `ftporter sync` prints — not a redrawn scree
 | `q` | Quit. Ctrl-C does the same. |
 
 **Capital letters change something, small letters only look**, so a key hit by accident reads
-rather than uploads.
+rather than uploads. `W` and `I` — the two that act on their own — turn green while they are on,
+key included, so it survives a bar too narrow for labels.
 
 **The cap and `prune` become questions instead of failures.** Where `ftporter sync` stops with
 `51 files would be deleted (cap 50)` and wants `--force`, the session prints the same list and waits
@@ -675,6 +676,7 @@ so code written against one works against the other; `src/session.mjs` states th
 | The TLS certificate was rejected | Self-signed certificates are common on small hosts: `"rejectUnauthorized": false`. |
 | `server does not offer TLS — this connection is unencrypted` | Under `"protocol": "ftp"`, said once per session. `"protocol": "ftps"` refuses to run at all rather than sending the password in the clear. |
 | `server cannot set modification times` | The FTP server has no `MFMT`, or no `MLSD` to read them back. Nothing to fix — the manifest takes over after the first pass. |
+| `uploading all N files: this server reports no modification times` | The same server on its first pass, with an empty manifest: nothing to compare against, so everything looks changed. It happens once. |
 | `server rejected SITE CHMOD` | That server has no `chmod`. The setting is ignored from then on. |
 
 ## Development

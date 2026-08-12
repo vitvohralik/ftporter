@@ -257,6 +257,16 @@ export async function reconcile(session, config, logger, opts = {}) {
 	for (const rel of blocked) logger.warn(`${rel}: symlink or directory on the server, skipping`);
 	for (const rel of stale) logger.warn(`${rel}: changed on the server, not deleting`);
 
+	// A server with no modification times and no manifest yet leaves nothing to compare against, so
+	// everything looks changed — on a tree that may well already be correct. Said here rather than
+	// left to be guessed, because "51 files to upload" on a site you believe is current is alarming,
+	// and the answer is that this happens once.
+	if (session.canStamp === false && uploads.length > 1 && Object.keys(manifest.files).length === 0) {
+		logger.warn(`uploading all ${uploads.length} files: this server reports no modification times`);
+		logger.dim('  Nothing here has been uploaded by ftporter before, so there is no record to compare');
+		logger.dim('  against either. After this pass the manifest makes the comparison exact.');
+	}
+
 	if (config.deleteCap !== null && deletes.length > config.deleteCap && !opts.force) {
 		for (const rel of deletes.slice(0, 10)) logger.log(`  ✗ ${rel}`);
 		if (deletes.length > 10) logger.dim(`  … and ${deletes.length - 10} more`);

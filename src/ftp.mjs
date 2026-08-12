@@ -179,8 +179,11 @@ export class FtpSession {
 			);
 		}
 		if (!this.canStamp) {
-			this.logger.trace(
-				`server cannot ${canSet ? 'report' : 'set'} modification times — comparing against the local manifest instead`,
+			// Said out loud, not traced: this is why a first run against such a server uploads a tree
+			// that is already correct, and being told afterwards helps nobody.
+			this.logger.dim(
+				`  server cannot ${canSet ? 'report' : 'set'} modification times (no ${canSet ? 'MLSD' : 'MFMT'})` +
+					' — comparing against the local manifest instead',
 			);
 		}
 	}

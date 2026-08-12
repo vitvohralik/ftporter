@@ -86,7 +86,13 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 		const groups = [
 			[confirm && ['F', confirm.label]],
 			[['S', 'sync'], ['n', 'dry-run']],
-			[['W', `watch:${watcher ? 'on' : 'off'}`], ['I', `patrol:${ticker ? formatDuration(ticker.every) : 'off'}`]],
+			// The two that act on their own get a color while they are on, because "is anything going
+			// up without me?" is the one thing about this screen worth answering at a glance. The key
+			// itself is tinted, not just the label, so the answer survives a bar too narrow for labels.
+			[
+				['W', `watch:${watcher ? 'on' : 'off'}`, Boolean(watcher)],
+				['I', `patrol:${ticker ? formatDuration(ticker.every) : 'off'}`, Boolean(ticker)],
+			],
 			[['l', 'list'], ['p', 'prune']],
 			[targetNames.length > 1 && ['T', 'target'], profileNames.length > 1 && ['P', 'profile']],
 			[['q', 'quit']],
@@ -102,7 +108,12 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 		const render = (rows, suffix) =>
 			rows
 				.map((group) =>
-					group.map(([key, label]) => `${color.bold}${key}${color.reset}${label ? ` ${label}` : ''}`).join('  '),
+					group
+						.map(([key, label, live]) => {
+							const tint = live ? color.green : '';
+							return `${tint}${color.bold}${key}${color.reset}${label ? `${tint} ${label}${color.reset}` : ''}`;
+						})
+						.join('  '),
 				)
 				.join(`${color.dim}${SEPARATOR}${color.reset}`) + (suffix ? `  ${color.dim}${suffix}${color.reset}` : '');
 
@@ -123,7 +134,9 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 		// as a bare "F" with no word anywhere saying so, is the one thing here that must not happen.
 		const trim = (count) =>
 			groups.map((group, at) =>
-				at >= groups.length - count && !(confirm && at === 0) ? group.map(([key]) => [key, null]) : group,
+				at >= groups.length - count && !(confirm && at === 0)
+					? group.map(([key, , live]) => [key, null, live])
+					: group,
 			);
 
 		const candidates = [
