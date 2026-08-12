@@ -366,6 +366,11 @@ export async function loadConfig(cli = {}, { cwd = process.cwd(), env = process.
 		root,
 		targetName,
 		profileName,
+		// What else this config file offers. Only interactive mode uses them — it cycles through the
+		// targets and profiles at runtime and has no other way to learn their names, since the blocks
+		// that declare them are stripped out of every resolved layer.
+		knownTargets: Object.keys(targets),
+		knownProfiles: [...new Set(['default', ...Object.keys(profiles)])],
 		label: profileName === 'default' ? 'files' : profileName,
 		connection: {
 			...resolved.connection,
@@ -496,6 +501,7 @@ function validate(config) {
 export const CONFIG_TEMPLATE = `{
   // ftporter configuration — https://github.com/vitvohralik/ftporter
   // Everything below is optional except the "server" block.
+  // Run \`ftporter\` to open the session (S uploads), or \`ftporter sync\` for a single pass.
 
   // Project root that gets uploaded. Relative to this file.
   "root": ".",

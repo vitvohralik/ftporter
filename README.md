@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/npm/l/ftporter?color=blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/vitvohralik/ftporter?logo=github&color=f5c518)](https://github.com/vitvohralik/ftporter/stargazers)
 
-**Your files' porter — SFTP deploy, watcher and interval patrol.**
+**Your files' porter — an interactive SFTP deploy session, watcher and patrol.**
 
 A porter carries the load *and* keeps an eye on the place. This one carries your project onto the
 server, watches it while you work, and does its rounds on a timer to make sure nothing was missed.
@@ -19,13 +19,14 @@ npm install -g ftporter
 cd ~/projects/my-site
 ftporter init      # write a config
 ftporter test      # check the connection
-ftporter watch     # upload on every save
+ftporter           # open the session: press S to upload
 ```
 
 ## Contents
 
 [Why ftporter?](#why-ftporter) · [Design principles](#design-principles) · [Install](#install) ·
-[Quick start](#quick-start) · [Commands](#commands) · [Configuration](#configuration) ·
+[Quick start](#quick-start) · [Commands](#commands) · [Interactive session](#interactive-session) ·
+[Configuration](#configuration) ·
 [How it works](#how-it-works) · [Programmatic use](#programmatic-use) ·
 [Troubleshooting](#troubleshooting) · [Development](#development) · [Changelog](#changelog) ·
 [License](#license)
@@ -40,8 +41,11 @@ ftporter watch     # upload on every save
 - **SFTP, FTPS or FTP, same tool.** Shared hosting rarely offers SSH. One `"protocol"` key switches
   the wire format and nothing else changes — the same diff, the same safe deletion, the same
   `watch`, the same `prune`.
-- **Dead simple to use.** One config file, one command. `ftporter watch` uploads on every save;
-  `ftporter` does a one-shot sync. No plugins, no GUI, no surprises.
+- **Dead simple to use.** One config file, one command. `ftporter` opens a session that uploads
+  when you press `S`; `ftporter watch` uploads on every save; `ftporter sync` does one pass and
+  exits. No plugins, no GUI, no surprises.
+- **It uploads when you say so.** The session holds the connection open and does nothing until
+  asked — which matters when a save is the middle of an edit, or when an agent is the one saving.
 - **Editor-agnostic.** Works the same whether you use VS Code, PhpStorm, Neovim, Zed or anything
   else — it is a standalone tool, not tied to any editor's lifecycle.
 - **It never serves half a file.** Uploads land under a temporary name and are renamed into place,
@@ -160,8 +164,9 @@ Then:
 
 ```bash
 ftporter test      # can I log in, does the remote root exist, may I write there?
-ftporter -n        # what would a sync do?
-ftporter           # do it
+ftporter status    # what would a sync do?
+ftporter sync      # do it
+ftporter           # or open the session and decide as you go
 ```
 
 You do not have to run these from the project root: ftporter looks for the config in the working
@@ -184,7 +189,9 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 
 | Command | What it does |
 | --- | --- |
-| `ftporter` | One pass: upload what changed, delete what is gone. |
+| `ftporter` | Open the [interactive session](#interactive-session) — one connection, held open, uploading only when asked. Without a terminal (a pipe, cron, CI) this runs `sync` instead. |
+| `ftporter ui` | The session, explicitly. Fails where there is no terminal. |
+| `ftporter sync` | One pass: upload what changed, delete what is gone. |
 | `ftporter watch` | Stay running, upload on every save. |
 | `ftporter patrol` | Stay running, full pass on a timer (`--interval 5m`). |
 | `ftporter status` | What a sync would do. Changes nothing. |
@@ -219,6 +226,11 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 `--json` prints a machine-readable summary (`{ ok, uploaded, deleted, uploads, deletes, ms }`) and
 suppresses everything else — handy in CI.
 
+> **Changed in 2.0:** a bare `ftporter` **in a terminal** opens the session rather than running a
+> single pass — typing the program's name opens the program, as terminal UIs do. Where there is no
+> terminal (a pipe, cron, CI) it still does the single pass it did in 1.x, so scripts keep working.
+> `ftporter sync` is explicit either way.
+
 ### Watch and patrol
 
 ```bash
@@ -237,6 +249,52 @@ machine that suspends. Adding `--interval` to `watch` gives you both — instant
 periodic sweep as the safety net.
 
 Both hold one connection open and reconnect by themselves if it drops.
+
+## Interactive session
+
+```bash
+ftporter        # in a terminal
+ftporter ui     # explicitly, anywhere
+```
+
+One connection, opened once and held open, and a key bar to use it:
+
+```
+───────────────────────────────────────────────────────────────────────────────
+S sync  n dry-run │ W watch:off  I patrol:off │ p prune │ T target  P profile │ q quit  → prod/assets
+```
+
+Work is finished at irregular moments and wants to go up *then* — not on every save, which is
+often the middle of an edit, and not on a timer that knows nothing about when you are done. One-off
+syncs would do it, at the price of a connection, a handshake and a cold scan each time.
+
+So the connection stays open and **nothing** goes up until asked. Above the bar it stays an ordinary
+scrollable log — the same lines `ftporter sync` prints — not a redrawn screen.
+
+| Key | |
+| --- | --- |
+| `S` | Sync: one full pass, exactly what `ftporter sync` does. |
+| `n` | Dry run: what a sync would do, changing nothing. |
+| `W` | Watch on/off. On, every save goes up. |
+| `I` | Patrol on/off. Asks how often, starting from whatever `watch.interval` says. |
+| `p` | Prune: list the files nobody knows about. |
+| `T` `P` | Pick a target or a profile from a list. Shown only when there is more than one. |
+| `F` | Answer the pending question — the one thing that just asked. |
+| `q` | Quit. Ctrl-C does the same. |
+
+**Capital letters change something, small letters only look**, so a key hit by accident reads
+rather than uploads.
+
+**The cap and `prune` become questions instead of failures.** Where `ftporter sync` stops with
+`51 files would be deleted (cap 50)` and wants `--force`, the session prints the same list and waits
+for `F`. Any other key answers "no", and a confirmation never outlives the question it belongs to.
+
+**Switching target or profile reopens the connection**, since a session belongs to one server. If
+the new one refuses, you keep the one you had. A running watcher is reattached to whatever the new
+profile uploads.
+
+`q` mid-upload finishes the current action first: abandoning a transfer is what leaves temporary
+files on the server, and waiting costs a few seconds.
 
 ## Configuration
 

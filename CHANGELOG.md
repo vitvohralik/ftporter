@@ -42,6 +42,29 @@ and `--protocol` override both. It defaults to `"sftp"`, which is what every 1.x
 Upgrading from 1.x: rename the connection block to `"server"` and put `"protocol"` inside it. That
 is the whole migration — `ftporter` says so by name if a block is missed.
 
+**Breaking:** `ftporter` with no arguments now opens the interactive session instead of running a
+single pass. Typing the program's name opens the program, as terminal UIs do; one-off work says
+which one it wants. **Where there is no terminal — a pipe, cron, CI — a bare
+`ftporter` still does the single pass it did in 1.x**, so scripts and scheduled jobs keep working
+untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter ui` is the session.
+
+- **Interactive session.** One connection, opened once and held open, and a key bar to use it:
+  `S` sync, `n` dry run, `W` watch on/off, `I` patrol on a timer it asks you for, `p` prune,
+  `F` confirm, `T`/`P` pick a target or profile from a list, `q` quit. Capital letters change
+  something, small ones only look, so a key hit by accident reads rather than uploads.
+- It uploads **nothing** until asked, which is the point when a project is deployed rather than run
+  locally, or when an agent is editing files and half-written states must not go up. Above the bar
+  it stays an ordinary scrollable log, not a redrawn screen.
+- The cap and `prune` become questions instead of failures: they print what they would remove and
+  wait for `F`. Any other key answers "no", and a confirmation never outlives the question.
+- `I` starts a patrol from inside the session, asking how often on a typed line that starts from
+  whatever `watch.interval` already says.
+- `q` mid-upload finishes the action first rather than abandoning a transfer.
+- Switching target or profile reopens the connection and keeps the old one if the new one refuses.
+- For anyone building on this: `createWatcher` is exported from `src/watch.mjs`, and a resolved
+  config now carries `knownTargets` and `knownProfiles` — the names `T` and `P` offer, which are
+  otherwise stripped out of every resolved layer.
+
 ### 1.2.0
 
 - **Atomic uploads**, on by default. A file is uploaded to a temporary name next to the target,

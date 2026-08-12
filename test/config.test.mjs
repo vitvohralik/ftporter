@@ -316,8 +316,12 @@ describe('matching', () => {
 });
 
 describe('cli arguments', () => {
-	it('defaults to the sync command', () => {
-		assert.equal(parseArgs([]).command, 'sync');
+	it('leaves the command unset when none is given, for run() to decide', () => {
+		// No command means interactive in a terminal and a single pass anywhere else, which only
+		// run() can tell apart — parseArgs must not guess one of them here.
+		assert.equal(parseArgs([]).command, null);
+		assert.equal(parseArgs(['sync']).command, 'sync');
+		assert.equal(parseArgs(['ui']).command, 'ui');
 		assert.equal(parseArgs(['watch']).command, 'watch');
 	});
 

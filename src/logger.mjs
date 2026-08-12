@@ -13,18 +13,24 @@ export const color = useColor
 		}
 	: { dim: '', red: '', green: '', yellow: '', cyan: '', bold: '', reset: '' };
 
-// Width of the status line currently on screen. Module scope, not per logger: whoever prints next
-// has to wipe it, and that includes the top-level error handler in bin/, which has no logger.
+// The status currently on screen — its widest row and how many rows it has. Module scope, not per
+// logger: whoever prints next has to wipe it, and that includes the top-level error handler in
+// bin/, which has no logger. More than one row because the interactive key bar draws a rule above
+// itself, so it does not run straight into the log.
 let statusWidth = 0;
+let statusRows = 0;
 
-/** Wipe the live status line, if any. Safe to call from anywhere, including after a throw. */
+/** Wipe the live status, however many rows it took. Safe to call from anywhere, even after a throw. */
 export function clearStatus() {
-	if (statusWidth === 0) return;
+	if (statusRows === 0) return;
 	// Erase the whole line where the terminal supports it: the status text is not always the last
 	// thing on it (Ctrl-C makes the shell echo ^C right after it), and padding only covers what we
 	// wrote ourselves. Falls back to blanking our own width on dumb terminals.
-	process.stdout.write(useColor ? '\r\x1b[2K' : `\r${' '.repeat(statusWidth)}\r`);
+	const blank = useColor ? '\r\x1b[2K' : `\r${' '.repeat(statusWidth)}\r`;
+	// Bottom row first, then up one at a time, which leaves the cursor where the status began.
+	process.stdout.write(blank + '\x1b[1A'.concat(blank).repeat(statusRows - 1));
 	statusWidth = 0;
+	statusRows = 0;
 }
 
 /**
@@ -49,7 +55,9 @@ export function createLogger({ quiet = false, verbose = false } = {}) {
 			if (!interactive) return;
 			clearStatus();
 			process.stdout.write(`${color.dim}${msg}${color.reset}`);
-			statusWidth = msg.length;
+			const rows = msg.split('\n');
+			statusWidth = Math.max(...rows.map((row) => row.length));
+			statusRows = rows.length;
 		},
 		clearStatus,
 		log: line,

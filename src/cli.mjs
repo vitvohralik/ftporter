@@ -4,6 +4,7 @@ import path from 'node:path';
 import { CONFIG_NAMES, CONFIG_TEMPLATE, loadConfig, PROTOCOLS, STRATEGIES } from './config.mjs';
 import { prune, reconcile } from './engine.mjs';
 import { runHook } from './hooks.mjs';
+import { runInteractive } from './interactive.mjs';
 import { color, createLogger } from './logger.mjs';
 import { openSession } from './session.mjs';
 import { runWatch } from './watch.mjs';
@@ -11,7 +12,7 @@ import { formatDuration, parseDuration, UserError } from './util.mjs';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-const COMMANDS = ['sync', 'watch', 'patrol', 'status', 'prune', 'test', 'init', 'config'];
+const COMMANDS = ['ui', 'sync', 'watch', 'patrol', 'status', 'prune', 'test', 'init', 'config'];
 
 const HELP = `
 ${color.bold}ftporter${color.reset} — your files' porter: SFTP/FTPS/FTP deploy, watcher and interval patrol
@@ -19,7 +20,11 @@ ${color.bold}ftporter${color.reset} — your files' porter: SFTP/FTPS/FTP deploy
   Usage: ftporter [command] [options]
 
 ${color.bold}Commands${color.reset}
-  sync                One pass: upload what changed, delete what is gone. ${color.dim}(default)${color.reset}
+  ${color.dim}(none)${color.reset}              Open the interactive session: one connection, held open, and keys
+                      to sync on demand — ${color.bold}S${color.reset}ync, ${color.bold}n${color.reset} dry-run, ${color.bold}W${color.reset}atch, patrol (${color.bold}I${color.reset}), ${color.bold}p${color.reset}rune, ${color.bold}T${color.reset}arget, ${color.bold}P${color.reset}rofile, ${color.bold}q${color.reset}uit.
+                      ${color.dim}Capitals change something, small letters only look.${color.reset}
+                      ${color.dim}Without a terminal this runs one pass instead.${color.reset}
+  sync                One pass: upload what changed, delete what is gone.
   watch               Stay running and upload on every save.
   patrol              Stay running and run a full pass on a timer (--interval).
   status              Show what a sync would do, change nothing. ${color.dim}(= sync --dry-run)${color.reset}
@@ -53,7 +58,8 @@ ${color.bold}Options${color.reset}
       --version           Print the version
 
 ${color.bold}Examples${color.reset}
-  ftporter                          ${color.dim}# one pass from the current project${color.reset}
+  ftporter                          ${color.dim}# interactive: press S when you want it uploaded${color.reset}
+  ftporter sync                     ${color.dim}# one pass, no questions${color.reset}
   ftporter watch                    ${color.dim}# upload on save${color.reset}
   ftporter patrol -i 5m             ${color.dim}# full pass every five minutes${color.reset}
   ftporter -t prod -n               ${color.dim}# what would go to production?${color.reset}
@@ -148,7 +154,7 @@ export function parseArgs(argv) {
 		command = arg;
 	}
 
-	opts.command = command ?? 'sync';
+	opts.command = command ?? null;
 	if (opts.noDelete) opts.delete = false;
 	if (opts.noAtomic) opts.atomicUpload = false;
 	if (opts.interval !== undefined && parseDuration(opts.interval) === null) {
@@ -174,6 +180,24 @@ export async function run(argv) {
 	const config = await loadConfig(opts);
 
 	if (opts.command === 'config') return printConfig(config);
+
+	// Typing the program's name opens the program — the bargain every terminal UI makes.
+	// One-off work says so: `sync`, `status`, `watch`. Without a terminal there is nothing to open
+	// and no ambiguity about what was meant, so a bare run stays the one pass it has always been;
+	// that keeps every cron job and CI step written against 1.x working untouched.
+	const interactive = opts.command === 'ui' || (opts.command === null && process.stdin.isTTY && process.stdout.isTTY);
+	if (opts.command === 'ui' && !(process.stdin.isTTY && process.stdout.isTTY)) {
+		throw new UserError('interactive mode needs a terminal', 'Use `ftporter sync` for a one-off run.');
+	}
+	if (interactive) {
+		logger.trace(`config ${config.configFile ?? '(none)'} · root ${config.root}`);
+		await runInteractive(config, logger, opts);
+		return 0;
+	}
+	if (opts.command === null) {
+		opts.command = 'sync';
+		logger.trace('no terminal — running a single pass, as `ftporter sync` does');
+	}
 
 	if (opts.command === 'status') opts.dryRun = true;
 	if (opts.command === 'patrol' && !config.watch.interval) {
@@ -284,6 +308,7 @@ function initConfig(opts) {
 	fs.writeFileSync(file, CONFIG_TEMPLATE);
 	console.log(`${color.green}✓${color.reset} wrote ${file}`);
 	console.log(`${color.dim}  Edit the server block, then run: ftporter test${color.reset}`);
+	console.log(`${color.dim}  Then just: ftporter${color.reset}`);
 	console.log(`${color.dim}  Add it to .gitignore if it ends up holding a password.${color.reset}`);
 	return 0;
 }

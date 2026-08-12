@@ -81,7 +81,8 @@ export async function makeFixture({ files = {}, config = {}, noTimestampPaths = 
 		reload: (cli = {}) => loadConfig({ config: configFile, ...cli }, { cwd: local, env: {} }),
 		write: (rel, content) => writeFile(local, rel, content),
 		remove: (rel) => fs.rmSync(path.join(local, rel), { recursive: true, force: true }),
-		remoteList: () => listTree(path.join(remote, 'site')),
+		/** Files on the "server" under a remote root, `/site` unless another one is named. */
+		remoteList: (root = 'site') => listTree(path.join(remote, root)),
 		remoteRead: (rel) => fs.readFileSync(path.join(remote, 'site', rel), 'utf8'),
 		remoteWrite: (rel, content) => writeFile(path.join(remote, 'site'), rel, content),
 		remoteExists: (rel) => fs.existsSync(path.join(remote, 'site', rel)),

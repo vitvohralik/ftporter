@@ -29,8 +29,6 @@ export async function runWatch(session, config, logger, opts = {}) {
 	let stopped = false;
 	let queuedFullPass = false;
 
-	const isIgnored = matcher([...DEFAULT_IGNORED, ...config.watch.ignored, ...config.exclude]);
-
 	const runFullPass = async () => {
 		try {
 			await runHook('beforeSync', config, logger);
@@ -79,34 +77,12 @@ export async function runWatch(session, config, logger, opts = {}) {
 	// the files that are already there, so the pass below still does the real work — but a file
 	// written *during* that pass now lands in `pending` instead of falling into the gap between the
 	// two, where it would have waited for its next save or for the interval to come around.
-	let watcher = null;
-	if (useWatcher) {
-		const { watch: chokidarWatch } = await import('chokidar');
-		const roots = config.roots?.length ? config.roots : config.strategy === 'whitelist' ? config.include : [''];
-
-		watcher = chokidarWatch(
-			roots.filter((r) => !r.startsWith('!')).map((r) => path.join(config.root, r)),
-			{
-				ignoreInitial: true,
-				ignored: (abs) => {
-					const rel = toPosix(path.relative(config.root, abs));
-					return rel !== '' && !rel.startsWith('..') && isIgnored(rel);
-				},
-				awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-				usePolling: config.watch.usePolling,
-				interval: config.watch.pollInterval,
-			},
-		);
-
-		watcher.on('all', (event, abs) => {
-			if (!['add', 'change', 'unlink'].includes(event)) return;
-			pending.add(toPosix(path.relative(config.root, abs)));
-			schedule();
-		});
-		watcher.on('error', (err) => logger.warn(`watcher: ${err.message}`));
-
-		await new Promise((resolve) => watcher.on('ready', resolve));
-	}
+	const watcher = useWatcher
+		? await createWatcher(config, logger, (rel) => {
+				pending.add(rel);
+				schedule();
+			})
+		: null;
 
 	// `running` holds off the debounced flush: whatever the watcher reports meanwhile waits its turn
 	// rather than opening a second batch over the same connection.
@@ -144,6 +120,42 @@ export async function runWatch(session, config, logger, opts = {}) {
 		process.on('SIGTERM', stop);
 	});
 	logger.dim('stopped');
+}
+
+/**
+ * Attaches chokidar and reports every relevant change as a project-relative path.
+ *
+ * Split out from the loop below because `watch`, `patrol` and the interactive session all need the
+ * same watcher and disagree only about what to do with what it reports — and because interactive
+ * mode attaches and detaches it repeatedly, which the loop never does.
+ */
+export async function createWatcher(config, logger, onChange) {
+	const { watch: chokidarWatch } = await import('chokidar');
+	const isIgnored = matcher([...DEFAULT_IGNORED, ...config.watch.ignored, ...config.exclude]);
+	const roots = config.roots?.length ? config.roots : config.strategy === 'whitelist' ? config.include : [''];
+
+	const watcher = chokidarWatch(
+		roots.filter((r) => !r.startsWith('!')).map((r) => path.join(config.root, r)),
+		{
+			ignoreInitial: true,
+			ignored: (abs) => {
+				const rel = toPosix(path.relative(config.root, abs));
+				return rel !== '' && !rel.startsWith('..') && isIgnored(rel);
+			},
+			awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+			usePolling: config.watch.usePolling,
+			interval: config.watch.pollInterval,
+		},
+	);
+
+	watcher.on('all', (event, abs) => {
+		if (!['add', 'change', 'unlink'].includes(event)) return;
+		onChange(toPosix(path.relative(config.root, abs)));
+	});
+	watcher.on('error', (err) => logger.warn(`watcher: ${err.message}`));
+
+	await new Promise((resolve) => watcher.on('ready', resolve));
+	return watcher;
 }
 
 const stamp = () => new Date().toTimeString().slice(0, 8);

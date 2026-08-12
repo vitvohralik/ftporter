@@ -1,7 +1,7 @@
 {
   "name": "ftporter",
   "version": "2.0.0",
-  "description": "Your files' porter — SFTP deploy, watcher and interval patrol.",
+  "description": "Your files' porter — an interactive SFTP deploy session, watcher and patrol.",
   "type": "module",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/vitvohralik/ftporter.git" },

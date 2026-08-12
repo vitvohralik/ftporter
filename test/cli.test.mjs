@@ -100,6 +100,22 @@ describe('cli', () => {
 		assert.deepEqual(fx.remoteList(), ['a.txt', 'sub/b.txt']);
 	});
 
+	it('falls back to a single pass where there is no terminal, and says so under ui', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		// execFile gives the child no TTY, which is exactly the cron and CI case.
+		const bare = await cli([], { cwd: fx.local });
+		assert.equal(bare.code, 0, bare.stderr);
+		assert.deepEqual(fx.remoteList(), ['a.txt'], 'a bare run still syncs where it cannot open a session');
+
+		const ui = await cli(['ui'], { cwd: fx.local });
+		assert.equal(ui.code, 1);
+		assert.match(ui.stderr, /interactive mode needs a terminal/);
+		assert.match(ui.stderr, /ftporter sync/);
+	});
+
 	it('checks a connection with the test command', async () => {
 		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
 		after(() => fx.cleanup());
