@@ -4,7 +4,7 @@ import { matcher } from './match.mjs';
 import { ignoredByGit, scanLocal } from './scan.mjs';
 import { NO_SUCH_FILE, TEMP_PREFIX } from './session.mjs';
 import { loadManifest, saveManifest, updateManifest } from './state.mjs';
-import { dirsOf, mapLimit, parentOf, secs, UserError } from './util.mjs';
+import { dirsOf, formatBytes, formatStamp, mapLimit, parentOf, secs, UserError } from './util.mjs';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Remote scan
@@ -346,6 +346,69 @@ export async function reconcilePaths(session, config, logger, batch) {
 		uploads,
 		deletes,
 	};
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Looking at the server
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One directory on the server, as it actually is — no diff, no manifest, nothing changed.
+ *
+ * Every other command answers "what is different?". This one answers "what is up there?", which is
+ * the question you have when a path looks wrong, an upload went somewhere unexpected, or you simply
+ * want to see the server without opening a second tool.
+ *
+ * A relative path is taken from the remote root, which is how the rest of the tool talks about
+ * paths; a leading slash addresses the server absolutely, for looking outside the root entirely.
+ *
+ * @returns {Promise<{path: string, entries: Array, dirs: number, files: number, bytes: number}>}
+ */
+export async function listRemote(session, config, logger, opts = {}) {
+	const asked = String(opts.path ?? '').trim();
+	// Absoluteness is read from what was typed, not from what is left after trimming: "/" trims down
+	// to nothing, and asking about it would otherwise land back on the remote root.
+	const trimmed = asked.replace(/\/+$/, '').replace(/^\.\//, '');
+	const path = asked.startsWith('/') ? trimmed || '/' : session.remotePath(trimmed);
+
+	const entries = await session.readdirAbs(path).catch((err) => {
+		if (err.code === NO_SUCH_FILE) {
+			throw new UserError(
+				`no such directory on the server: ${path}`,
+				asked && !asked.startsWith('/')
+					? `Paths are taken from the remote root (${session.remoteRoot}). Start with "/" to give an absolute one.`
+					: undefined,
+			);
+		}
+		throw err;
+	});
+
+	// Directories first, then files, each alphabetically — the order a listing is read in.
+	entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
+
+	const files = entries.filter((entry) => !entry.dir);
+	const bytes = files.reduce((total, entry) => total + (entry.size ?? 0), 0);
+
+	logger.log(`${color.dim}${path}${color.reset}`);
+	if (entries.length === 0) logger.dim('  (empty)');
+
+	// The size column is only as wide as it needs to be, so a directory of small files does not sit
+	// behind a gutter sized for one big one.
+	const width = Math.max(0, ...files.map((entry) => formatBytes(entry.size).length));
+	for (const entry of entries) {
+		const size = entry.dir ? ''.padStart(width) : formatBytes(entry.size).padStart(width);
+		const name = entry.dir ? `${color.cyan}${entry.name}/${color.reset}` : entry.name;
+		logger.log(`  ${size}  ${color.dim}${formatStamp(entry.mtime)}${color.reset}  ${name}${entry.link ? ' →' : ''}`);
+	}
+
+	const counted = [
+		`${entries.length - files.length} ${entries.length - files.length === 1 ? 'directory' : 'directories'}`,
+		`${files.length} ${files.length === 1 ? 'file' : 'files'}`,
+	];
+	if (files.length) counted.push(formatBytes(bytes));
+	logger.dim(`  ${counted.join(' · ')}`);
+
+	return { path, entries, dirs: entries.length - files.length, files: files.length, bytes };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

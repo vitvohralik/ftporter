@@ -8,13 +8,13 @@
  * exactly the way the CLI does, so a script and the command line behave identically.
  */
 import { loadConfig } from './config.mjs';
-import { prune as pruneRemote, reconcile } from './engine.mjs';
+import { listRemote as listOnServer, prune as pruneRemote, reconcile } from './engine.mjs';
 import { createLogger, silentLogger } from './logger.mjs';
 import { openSession } from './session.mjs';
 import { runWatch } from './watch.mjs';
 
 export { loadConfig, findConfigFile, DEFAULTS, PROTOCOLS, STRATEGIES } from './config.mjs';
-export { diff, reconcile, reconcilePaths, scanRemote } from './engine.mjs';
+export { diff, listRemote, reconcile, reconcilePaths, scanRemote } from './engine.mjs';
 export { scanLocal } from './scan.mjs';
 export { openSession } from './session.mjs';
 export { SftpSession } from './sftp.mjs';
@@ -46,3 +46,6 @@ export const patrol = (options = {}) =>
 
 export const prune = (options = {}) =>
 	withSession(options, (session, config, logger) => pruneRemote(session, config, logger, options));
+
+export const list = (options = {}) =>
+	withSession(options, (session, config, logger) => listOnServer(session, config, logger, options));

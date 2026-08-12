@@ -42,6 +42,28 @@ export function formatDuration(ms) {
 
 export const sha1 = (text) => createHash('sha1').update(text).digest('hex');
 
+/** Sizes as a person reads them. Bytes stay exact; everything above gets one decimal under 10. */
+export function formatBytes(bytes) {
+	if (!Number.isFinite(bytes) || bytes < 0) return '?';
+	if (bytes < 1024) return `${bytes} B`;
+	const units = ['KB', 'MB', 'GB', 'TB'];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** Local time, to the minute — enough to recognise a file, short enough to line up in a listing. */
+export function formatStamp(ms) {
+	if (!ms) return '—';
+	const at = new Date(ms);
+	const pad = (n) => String(n).padStart(2, '0');
+	return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
 /** POSIX-style relative path — the remote side always uses `/`, even when running on Windows. */
 export const toPosix = (rel) => rel.split(path.sep).join('/');
 

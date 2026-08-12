@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CONFIG_NAMES, CONFIG_TEMPLATE, loadConfig, PROTOCOLS, STRATEGIES } from './config.mjs';
-import { prune, reconcile } from './engine.mjs';
+import { listRemote, prune, reconcile } from './engine.mjs';
 import { runHook } from './hooks.mjs';
 import { runInteractive } from './interactive.mjs';
 import { color, createLogger } from './logger.mjs';
@@ -12,7 +12,10 @@ import { formatDuration, parseDuration, UserError } from './util.mjs';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-const COMMANDS = ['ui', 'sync', 'watch', 'patrol', 'status', 'prune', 'test', 'init', 'config'];
+const COMMANDS = ['ui', 'sync', 'watch', 'patrol', 'status', 'list', 'prune', 'test', 'init', 'config'];
+
+/** Commands that take one path after the command name. */
+const TAKES_PATH = new Set(['list']);
 
 const HELP = `
 ${color.bold}ftporter${color.reset} — your files' porter: SFTP/FTPS/FTP deploy, watcher and interval patrol
@@ -21,13 +24,15 @@ ${color.bold}ftporter${color.reset} — your files' porter: SFTP/FTPS/FTP deploy
 
 ${color.bold}Commands${color.reset}
   ${color.dim}(none)${color.reset}              Open the interactive session: one connection, held open, and keys
-                      to sync on demand — ${color.bold}S${color.reset}ync, ${color.bold}n${color.reset} dry-run, ${color.bold}W${color.reset}atch, patrol (${color.bold}I${color.reset}), ${color.bold}p${color.reset}rune, ${color.bold}T${color.reset}arget, ${color.bold}P${color.reset}rofile, ${color.bold}q${color.reset}uit.
+                      to sync on demand — ${color.bold}S${color.reset}ync, ${color.bold}n${color.reset} dry-run, ${color.bold}W${color.reset}atch, patrol (${color.bold}I${color.reset}), ${color.bold}l${color.reset}ist, ${color.bold}p${color.reset}rune, ${color.bold}T${color.reset}arget, ${color.bold}P${color.reset}rofile, ${color.bold}q${color.reset}uit.
                       ${color.dim}Capitals change something, small letters only look.${color.reset}
                       ${color.dim}Without a terminal this runs one pass instead.${color.reset}
   sync                One pass: upload what changed, delete what is gone.
   watch               Stay running and upload on every save.
   patrol              Stay running and run a full pass on a timer (--interval).
   status              Show what a sync would do, change nothing. ${color.dim}(= sync --dry-run)${color.reset}
+  list [path]         List a directory on the server. ${color.dim}Defaults to the remote root; a relative${color.reset}
+                      ${color.dim}path is taken from it, a leading / is absolute.${color.reset}
   prune               List files on the server nobody knows about. Lists only until --force;
                       --temp narrows it to leftovers from interrupted uploads.
   test                Check the connection and the remote root, upload nothing.
@@ -63,6 +68,8 @@ ${color.bold}Examples${color.reset}
   ftporter watch                    ${color.dim}# upload on save${color.reset}
   ftporter patrol -i 5m             ${color.dim}# full pass every five minutes${color.reset}
   ftporter -t prod -n               ${color.dim}# what would go to production?${color.reset}
+  ftporter list                     ${color.dim}# what is in the remote root?${color.reset}
+  ftporter list public/build        ${color.dim}# and in one directory under it${color.reset}
   ftporter -p assets --no-delete    ${color.dim}# just the build output${color.reset}
   ftporter --protocol ftps          ${color.dim}# same config, over FTP with TLS${color.reset}
 
@@ -147,7 +154,13 @@ export function parseArgs(argv) {
 			continue;
 		}
 		if (arg.startsWith('-')) throw new UserError(`unknown option '${arg}' (see --help)`);
-		if (command) throw new UserError(`unexpected argument '${arg}'`);
+		if (command) {
+			// A second bare word is a path for the commands that take one, and a mistake everywhere else.
+			if (!TAKES_PATH.has(command)) throw new UserError(`unexpected argument '${arg}'`);
+			if (opts.path !== undefined) throw new UserError(`${command} takes one path, not two`);
+			opts.path = arg;
+			continue;
+		}
 		if (!COMMANDS.includes(arg)) {
 			throw new UserError(`unknown command '${arg}' (known: ${COMMANDS.join(', ')})`);
 		}
@@ -218,6 +231,13 @@ export async function run(argv) {
 			case 'test':
 				await testConnection(session, config, logger);
 				break;
+			case 'list': {
+				const listed = await listRemote(session, config, logger, opts);
+				if (opts.json) {
+					console.log(JSON.stringify({ ok: true, path: listed.path, entries: listed.entries }, null, 2));
+				}
+				break;
+			}
 			case 'prune':
 				await prune(session, config, logger, opts);
 				break;

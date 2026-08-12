@@ -1,7 +1,7 @@
 import { emitKeypressEvents } from 'node:readline';
 
 import { loadConfig } from './config.mjs';
-import { prune, reconcile, reconcilePaths } from './engine.mjs';
+import { listRemote, prune, reconcile, reconcilePaths } from './engine.mjs';
 import { runHook } from './hooks.mjs';
 import { color } from './logger.mjs';
 import { createPicker, createPrompt } from './overlay.mjs';
@@ -47,6 +47,8 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 	const pending = new Set();
 	let debounce = null;
 	const screen = io.output ?? process.stdout;
+	// Where `l` looked last, so going back to the same directory is one keystroke and an Enter.
+	let lastListed = '';
 
 	/**
 	 * What `T` and `P` can offer, worked out once and kept.
@@ -85,7 +87,7 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 			[confirm && ['F', confirm.label]],
 			[['S', 'sync'], ['n', 'dry-run']],
 			[['W', `watch:${watcher ? 'on' : 'off'}`], ['I', `patrol:${ticker ? formatDuration(ticker.every) : 'off'}`]],
-			[['p', 'prune']],
+			[['l', 'list'], ['p', 'prune']],
 			[targetNames.length > 1 && ['T', 'target'], profileNames.length > 1 && ['P', 'profile']],
 			[['q', 'quit']],
 		]
@@ -201,6 +203,24 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 			confirm = null;
 			await reconcile(session, config, logger, { ...opts, dryRun: true });
 		});
+
+	/**
+	 * Looks at a directory on the server. Asks which one, starting from wherever it looked last, so
+	 * an empty line is the remote root and Enter alone repeats the previous look.
+	 */
+	const listNow = async () => {
+		if (busy || quitting || picker) return;
+		logger.clearStatus();
+		picker = createPrompt({ title: 'list which directory', initial: lastListed, output: screen });
+		const where = await picker.done;
+		picker = null;
+		if (where === null) {
+			runDuePass();
+			return draw();
+		}
+		lastListed = where;
+		await act(() => listRemote(session, config, logger, { ...opts, path: where }));
+	};
 
 	const pruneNow = (force = false) =>
 		act(async () => {
@@ -368,6 +388,7 @@ export async function runInteractive(initial, logger, opts = {}, io = {}) {
 	const keymap = {
 		S: () => sync(),
 		n: dryRun,
+		l: listNow,
 		p: () => pruneNow(),
 		W: toggleWatch,
 		I: togglePatrol,

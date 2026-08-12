@@ -65,6 +65,10 @@ untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter
   config now carries `knownTargets` and `knownProfiles` — the names `T` and `P` offer, which are
   otherwise stripped out of every resolved layer.
 
+- **`ftporter list [path]`** (and **`l`** in the session) — see a directory on the server as it
+  actually is, with sizes and modification times, directories first. No diff, no manifest, nothing
+  changed. A relative path is taken from the remote root, a leading `/` addresses the server
+  absolutely, and `--json` prints the entries instead.
 ### 1.2.0
 
 - **Atomic uploads**, on by default. A file is uploaded to a temporary name next to the target,

@@ -316,6 +316,15 @@ describe('matching', () => {
 });
 
 describe('cli arguments', () => {
+	it('takes a path after list, and refuses one anywhere else', () => {
+		assert.equal(parseArgs(['list']).path, undefined);
+		assert.equal(parseArgs(['list', 'public/build']).path, 'public/build');
+		assert.equal(parseArgs(['list', '/var/www']).path, '/var/www');
+
+		assert.throws(() => parseArgs(['list', 'a', 'b']), /takes one path, not two/);
+		assert.throws(() => parseArgs(['sync', 'public']), /unexpected argument 'public'/);
+	});
+
 	it('leaves the command unset when none is given, for run() to decide', () => {
 		// No command means interactive in a terminal and a single pass anywhere else, which only
 		// run() can tell apart — parseArgs must not guess one of them here.

@@ -195,6 +195,7 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `ftporter watch` | Stay running, upload on every save. |
 | `ftporter patrol` | Stay running, full pass on a timer (`--interval 5m`). |
 | `ftporter status` | What a sync would do. Changes nothing. |
+| `ftporter list [path]` | Show a directory on the server as it actually is. Changes nothing. |
 | `ftporter prune` | List server files nobody knows about; `--force` removes them. |
 | `ftporter prune --temp` | List only leftovers from interrupted uploads, anywhere on the server. |
 | `ftporter test` | Connection, remote root and write access. Uploads nothing. |
@@ -223,8 +224,9 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `--host` `--user` `--port` `--remote-root` `--key` `--password` | Override the connection for one run |
 | `-v, --verbose` / `-q, --quiet` / `--json` | Output control |
 
-`--json` prints a machine-readable summary (`{ ok, uploaded, deleted, uploads, deletes, ms }`) and
-suppresses everything else — handy in CI.
+`--json` prints a machine-readable result and suppresses everything else — handy in CI. For a sync
+that is `{ ok, target, profile, files, uploaded, deleted, failed, uploads, deletes, ms }`; for
+`list` it is `{ ok, path, entries }`.
 
 > **Changed in 2.0:** a bare `ftporter` **in a terminal** opens the session rather than running a
 > single pass — typing the program's name opens the program, as terminal UIs do. Where there is no
@@ -250,6 +252,29 @@ periodic sweep as the safety net.
 
 Both hold one connection open and reconnect by themselves if it drops.
 
+### Looking at the server
+
+Every other command answers "what is different?". `list` answers "what is up there?" — for when a
+path looks wrong or an upload went somewhere unexpected. No diff, no manifest, nothing changed.
+
+```bash
+ftporter list                  # the remote root
+ftporter list public/build     # a directory under it
+ftporter list /var/log         # a leading / addresses the server absolutely
+```
+
+```
+/var/www/example
+        2026-08-12 14:02  app/
+        2026-08-11 09:31  public/
+  1.4 KB  2026-08-12 16:57  composer.json
+   184 B  2026-08-09 22:10  index.php
+  2 directories · 2 files · 1.6 KB
+```
+
+Directories first, then files, each alphabetically. Symlinks are marked with `→`, and `--json`
+prints the entries instead, with sizes in bytes and mtimes in milliseconds.
+
 ## Interactive session
 
 ```bash
@@ -261,7 +286,7 @@ One connection, opened once and held open, and a key bar to use it:
 
 ```
 ───────────────────────────────────────────────────────────────────────────────
-S sync  n dry-run │ W watch:off  I patrol:off │ p prune │ T target  P profile │ q quit  → prod/assets
+S sync  n dry-run │ W watch:off  I patrol:off │ l list  p prune │ T target  P profile │ q quit  → prod/assets
 ```
 
 Work is finished at irregular moments and wants to go up *then* — not on every save, which is
@@ -277,6 +302,7 @@ scrollable log — the same lines `ftporter sync` prints — not a redrawn scree
 | `n` | Dry run: what a sync would do, changing nothing. |
 | `W` | Watch on/off. On, every save goes up. |
 | `I` | Patrol on/off. Asks how often, starting from whatever `watch.interval` says. |
+| `l` | List a directory on the server, starting from wherever it looked last. |
 | `p` | Prune: list the files nobody knows about. |
 | `T` `P` | Pick a target or a profile from a list. Shown only when there is more than one. |
 | `F` | Answer the pending question — the one thing that just asked. |

@@ -25,7 +25,13 @@ function start(fx, opts = {}, io = {}) {
 	const isBar = (msg) => !msg.startsWith(' ');
 	const keysOf = (msg) => msg.split('\n').at(-1);
 	const bars = [];
-	const recorder = { ...logger, status: (msg) => isBar(msg) && bars.push(msg) };
+	let onLog = () => {};
+	const recorder = {
+		...logger,
+		status: (msg) => isBar(msg) && bars.push(msg),
+		log: (msg) => onLog(msg),
+		dim: (msg) => onLog(msg),
+	};
 	// The picker draws straight to its output rather than through the logger, so it is collected
 	// separately — with the escape codes stripped, since only the text is under test.
 	let drawn = '';
@@ -54,6 +60,10 @@ function start(fx, opts = {}, io = {}) {
 		bar: () => keysOf(bars.at(-1) ?? ''),
 		/** The rule the bar draws above itself, to keep it clear of the log. */
 		rule: () => (bars.at(-1) ?? '').split('\n')[0] ?? '',
+		/** Watches what the session writes to the log above the bar. */
+		onLog: (fn) => {
+			onLog = fn;
+		},
 		/**
 		 * Everything the picker has drawn, escape codes stripped — reading does not consume it, so it
 		 * is safe to poll while waiting for the list to come up.
@@ -149,7 +159,7 @@ describe('interactive', () => {
 
 		// Read left to right: what just asked, syncing, the two automatic switches, looking around,
 		// where it points, and out.
-		assert.match(ui.bar(), /S sync {2}n dry-run │ W watch:\S+ {2}I patrol:\S+ │ p prune │ q quit/);
+		assert.match(ui.bar(), /S sync {2}n dry-run │ W watch:\S+ {2}I patrol:\S+ │ l list {2}p prune │ q quit/);
 		assert.match(ui.rule(), /^─+$/, 'a rule keeps the bar off the last line of the log');
 		assert.match(ui.bar(), /→ base\/default$/, 'and the far end says where it all points');
 
@@ -327,6 +337,40 @@ describe('interactive', () => {
 
 			await quit(ui);
 		});
+	});
+
+	it('lists a directory on the server without changing anything', async () => {
+		const fx = await makeFixture({
+			files: { 'a.txt': 'a', 'public/b.txt': 'bb' },
+			config: { strategy: 'blacklist' },
+		});
+		after(() => fx.cleanup());
+		const ui = start(fx);
+		await ui.until(() => ui.bars() > 0);
+		assert.match(ui.bar(), /l list/);
+
+		assert.ok(await ui.run('S', () => fx.remoteList().length === 2));
+
+		const printed = [];
+		ui.onLog((msg) => printed.push(msg));
+		ui.press('l');
+		assert.ok(await ui.until(() => /list which directory/.test(ui.picker())), 'it asks which one');
+
+		ui.type('public');
+		const drawn = ui.bars();
+		ui.enter();
+		assert.ok(await ui.until(() => ui.bars() > drawn), 'and the listing finishes');
+		assert.ok(printed.some((line) => line.includes('/site/public')), 'naming the directory it looked in');
+		assert.ok(printed.some((line) => line.includes('b.txt')), 'and what is in it');
+		assert.equal(fx.remoteList().length, 2, 'nothing on the server changed');
+
+		// The next look starts where the last one left off.
+		ui.press('l');
+		assert.ok(await ui.until(() => /public/.test(ui.picker())), 'it remembers where it looked');
+		ui.escape();
+		await ui.until(() => ui.bars() > drawn + 1);
+
+		await quit(ui);
 	});
 
 	describe('picking a target', () => {

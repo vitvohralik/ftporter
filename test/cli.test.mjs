@@ -116,6 +116,36 @@ describe('cli', () => {
 		assert.match(ui.stderr, /ftporter sync/);
 	});
 
+	it('lists a directory on the server, and takes a path', async () => {
+		const fx = await makeFixture({
+			files: { 'a.txt': 'a', 'public/b.txt': 'bb' },
+			config: { strategy: 'blacklist' },
+		});
+		after(() => fx.cleanup());
+		fx.session.end();
+		await cli(['sync'], { cwd: fx.local });
+
+		const root = await cli(['list'], { cwd: fx.local });
+		assert.equal(root.code, 0, root.stderr);
+		assert.match(root.stdout, /public\//, 'directories are marked');
+		assert.match(root.stdout, /a\.txt/);
+		assert.match(root.stdout, /1 directory · 1 file/);
+
+		const sub = await cli(['list', 'public'], { cwd: fx.local });
+		assert.equal(sub.code, 0, sub.stderr);
+		assert.match(sub.stdout, /b\.txt/);
+		assert.doesNotMatch(sub.stdout, /a\.txt/, 'and only that directory');
+
+		const missing = await cli(['list', 'nope'], { cwd: fx.local });
+		assert.equal(missing.code, 1);
+		assert.match(missing.stderr, /no such directory on the server/);
+
+		const json = await cli(['list', '--json'], { cwd: fx.local });
+		const parsed = JSON.parse(json.stdout);
+		assert.equal(parsed.path, '/site');
+		assert.deepEqual(parsed.entries.map((entry) => entry.name).sort(), ['a.txt', 'public']);
+	});
+
 	it('checks a connection with the test command', async () => {
 		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
 		after(() => fx.cleanup());
