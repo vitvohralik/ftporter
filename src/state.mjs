@@ -110,6 +110,52 @@ function sleep(ms) {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/**
+ * Forgets recorded manifests: the section this run uses, or every section of the project.
+ *
+ * Never touches the server, and never loses anything that cannot be rebuilt — the next pass reads
+ * the live server state and writes the manifest again, and until it does, only deletion is
+ * unavailable. That is why this needs no confirmation, unlike the config file, which is written by
+ * hand and rebuilt by nobody.
+ *
+ * @returns {{sections: string[], files: number, removedFile: boolean}} `sections` names what went,
+ *   in the `target (profile)` form the state file keys them by.
+ */
+export function forgetManifest(config, { all = false, dryRun = false } = {}) {
+	const empty = { sections: [], files: 0, removedFile: false };
+	if (!fs.existsSync(config.stateFile)) return empty;
+
+	let result = empty;
+	withLock(config.stateFile, () => {
+		const state = readState(config.stateFile);
+		const sections = [];
+		let files = 0;
+
+		for (const target of all ? Object.keys(state.targets) : [config.target]) {
+			const stored = state.targets[target];
+			if (!stored) continue;
+			for (const profile of all ? Object.keys(stored) : [config.profileName]) {
+				if (!stored[profile]) continue;
+				files += Object.keys(stored[profile].files ?? {}).length;
+				sections.push(`${target} (${profile})`);
+				delete stored[profile];
+			}
+			if (Object.keys(stored).length === 0) delete state.targets[target];
+		}
+
+		// A state file with no sections left is a stale file, not an empty manifest: the next run
+		// writes a fresh one either way, and leaving it behind makes `forget --all` look half-done.
+		const removedFile = sections.length > 0 && Object.keys(state.targets).length === 0;
+		if (!dryRun && sections.length) {
+			if (removedFile) fs.rmSync(config.stateFile, { force: true });
+			else writeAtomic(config.stateFile, JSON.stringify(state));
+		}
+		result = { sections, files, removedFile };
+	});
+
+	return result;
+}
+
 /** Merges a partial (watch batch) result into the stored manifest instead of replacing it. */
 export function updateManifest(config, touched, local, previous, failed = new Map(), unstamped = []) {
 	const merged = new Map(Object.entries(previous.files).map(([rel, [size, mtime]]) => [rel, { size, mtime }]));

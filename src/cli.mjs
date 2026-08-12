@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CONFIG_NAMES, CONFIG_TEMPLATE, loadConfig, PROTOCOLS, STRATEGIES } from './config.mjs';
+import { forgetManifest } from './state.mjs';
 import { listRemote, prune, reconcile } from './engine.mjs';
 import { runHook } from './hooks.mjs';
 import { runInteractive } from './interactive.mjs';
@@ -12,7 +13,7 @@ import { formatDuration, parseDuration, UserError } from './util.mjs';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-const COMMANDS = ['ui', 'sync', 'watch', 'patrol', 'status', 'list', 'prune', 'test', 'init', 'config'];
+const COMMANDS = ['ui', 'sync', 'watch', 'patrol', 'status', 'list', 'prune', 'test', 'init', 'config', 'forget'];
 
 /** Commands that take one path after the command name. */
 const TAKES_PATH = new Set(['list']);
@@ -38,6 +39,8 @@ ${color.bold}Commands${color.reset}
   test                Check the connection and the remote root, upload nothing.
   init                Write a commented config file into the current directory.
   config              Print the resolved configuration (secrets redacted).
+  forget              Delete this run's manifest. --all covers every target and profile of
+                      the project; --everything takes the config file with it (needs -f).
 
 ${color.bold}Options${color.reset}
   -c, --config <file>     Config file to use ${color.dim}(default: nearest ${CONFIG_NAMES[3]} upwards)${color.reset}
@@ -54,6 +57,8 @@ ${color.bold}Options${color.reset}
       --no-delete         Upload only, never delete
       --no-atomic         Write straight onto the target (faster, unsafe while in use)
       --temp              With prune: only .ftporter-tmp.* leftovers, anywhere on the server
+      --all               With forget: every target and profile, not just this run's
+      --everything        With forget: the config file too — nothing is left behind
   -f, --force             Allow a delete count over the cap; confirm prune
       --host/--user/--password/--port/--remote-root/--key   Override the connection for one run
   -v, --verbose           Show timings
@@ -72,6 +77,7 @@ ${color.bold}Examples${color.reset}
   ftporter list public/build        ${color.dim}# and in one directory under it${color.reset}
   ftporter -p assets --no-delete    ${color.dim}# just the build output${color.reset}
   ftporter --protocol ftps          ${color.dim}# same config, over FTP with TLS${color.reset}
+  ftporter forget                   ${color.dim}# start the manifest over on the next run${color.reset}
 
   Docs: https://github.com/vitvohralik/ftporter
 `;
@@ -94,6 +100,8 @@ const FLAGS = {
 	'--no-delete': 'noDelete',
 	'--no-atomic': 'noAtomic',
 	'--temp': 'temp',
+	'--all': 'all',
+	'--everything': 'everything',
 };
 
 const VALUES = {
@@ -202,6 +210,7 @@ export async function run(argv) {
 	const config = await loadConfig(opts);
 
 	if (opts.command === 'config') return printConfig(config);
+	if (opts.command === 'forget') return forgetState(config, logger, opts);
 
 	// Typing the program's name opens the program — the bargain every terminal UI makes.
 	// One-off work says so: `sync`, `status`, `watch`. Without a terminal there is nothing to open
@@ -355,6 +364,51 @@ function initConfig(opts) {
  * absolute, `target` is where this run points, and `label`, `targetName`, `profileName`,
  * `knownTargets` and `knownProfiles` say which of the file's variants it picked.
  */
+/**
+ * Throws the local record away, so the next run starts from the server rather than from what this
+ * machine remembers.
+ *
+ * Three depths, because "reset it" means three different things: the manifest for this target and
+ * profile, every manifest of the project, or that plus the config file. The first two are safe by
+ * construction — nothing on the server changes, and the next pass rebuilds what it needs from the
+ * live server state, with only deletion unavailable until it does. The config file is not: it is
+ * written by hand, it may hold the only copy of a password, and nothing rebuilds it. So it is the
+ * one depth that lists first and waits for --force, the same bargain `prune` makes.
+ */
+function forgetState(config, logger, opts) {
+	const everything = Boolean(opts.everything);
+	const all = everything || Boolean(opts.all);
+
+	if (everything && !opts.force) {
+		logger.log(`  ? ${config.configFile ?? '(no config file)'}`);
+		logger.dim('  the config file is written by hand and nothing rebuilds it');
+		logger.dim('  Take it, and every manifest for this project, with: ftporter forget --everything --force');
+		return 0;
+	}
+
+	const { sections, files, removedFile } = forgetManifest(config, { all, dryRun: opts.dryRun });
+	const what = opts.dryRun ? 'would forget' : 'forgot';
+
+	if (sections.length === 0) {
+		logger.ok(all ? 'nothing recorded for this project' : `nothing recorded for ${config.target} (${config.profileName})`);
+	} else {
+		logger.ok(`${what} ${files} ${files === 1 ? 'file' : 'files'} in ${sections.length} ${sections.length === 1 ? 'manifest' : 'manifests'}`);
+		for (const section of sections) logger.dim(`  ${section}`);
+		if (removedFile) logger.dim(`  ${config.stateFile} is gone`);
+		logger.dim('  The next pass reads the server and writes it again; until then nothing is deleted.');
+	}
+
+	if (everything && config.configFile) {
+		if (!opts.dryRun) fs.rmSync(config.configFile, { force: true });
+		logger.ok(`${opts.dryRun ? 'would remove' : 'removed'} ${config.configFile}`);
+	}
+
+	if (opts.json) {
+		console.log(JSON.stringify({ ok: true, forgot: sections, files, stateFile: removedFile ? null : config.stateFile }, null, 2));
+	}
+	return 0;
+}
+
 function printConfig(config) {
 	const server = {
 		protocol: config.protocol,

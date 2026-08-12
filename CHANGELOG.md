@@ -78,6 +78,13 @@ untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter
 
 - `ftporter init` now states `atomicUpload: true` in the generated config, rather than leaving it
   to the default: it is worth knowing you have it before you decide to turn it off.
+- **`ftporter forget`** throws the local manifest away, so the next run starts from the server
+  instead of from what this machine remembers. Three depths, because "reset it" means three
+  different things: this target and profile, `--all` for every one of the project, `--everything`
+  for those plus the config file. The first two are safe by construction and need no confirmation —
+  nothing on the server changes and the next pass rebuilds the record. The config file is written by
+  hand and rebuilt by nobody, so `--everything` lists it and waits for `--force`, as `prune` does.
+  Until now the only way was to find `stateFile` in `ftporter config` and `rm` it by hand.
 - **Fixed `--include=<glob>` and `--exclude=<glob>`** coming back as `unknown option`. Those two
   were read before the `--name=value` form was, so only the separate-argument spelling reached
   them — for the pair whose whole job is to be written the way `.gitignore` writes them.

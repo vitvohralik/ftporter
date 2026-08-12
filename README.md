@@ -201,6 +201,7 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `ftporter test` | Connection, remote root and write access. Uploads nothing. |
 | `ftporter init` | Write a commented config into the current directory. |
 | `ftporter config` | Print the fully resolved configuration, secrets redacted, in the shape a config file is written in. |
+| `ftporter forget` | Throw the local manifest away, so the next run starts from the server. |
 
 ### Options
 
@@ -220,6 +221,8 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `--no-delete` | Upload only, never delete |
 | `--no-atomic` | Write straight onto the target instead of renaming a temp file into place |
 | `--temp` | With `prune`: only `.ftporter-tmp.*` leftovers, ignoring `pruneSkip` and .gitignore |
+| `--all` | With `forget`: every target and profile of the project, not just this run's |
+| `--everything` | With `forget`: the config file too (needs `-f`) |
 | `-f, --force` | Allow a delete count over the cap; confirm `prune` |
 | `--host` `--user` `--port` `--remote-root` `--key` `--password` | Override the connection for one run |
 | `-v, --verbose` / `-q, --quiet` / `--json` | Output control |
@@ -453,6 +456,22 @@ cleaned up. Three guards, all on by default:
 The manifest lives outside your project by default
 (`~/.local/state/ftporter/<project>-<hash>.json`, override with `"stateFile"`). Deleting it is
 safe: nothing breaks, the next run rebuilds it, and only deletion is unavailable until it does.
+
+### Starting over
+
+```bash
+ftporter forget                       # this target and profile
+ftporter forget --all                 # every target and profile of this project
+ftporter forget --everything --force  # and the config file with them
+```
+
+Nothing on the server changes, whichever you pick: the next pass reads the live server state and
+writes the manifest again. Until it does, nothing is deleted — which is the only thing a manifest
+decides. `-n` shows what would go.
+
+The config file is the exception, and the reason `--everything` waits for `--force`: it is written
+by hand, it may hold the only copy of a password, and nothing rebuilds it. Without `--force` it is
+listed and left alone, the same bargain `prune` makes.
 
 ### Profiles and targets
 

@@ -187,6 +187,74 @@ describe('cli', () => {
 		assert.equal(printed.profiles, undefined);
 	});
 
+	it('forgets this run\'s manifest and leaves the other sections alone', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a', 'b.txt': 'b' } });
+		after(() => fx.cleanup());
+
+		await cli(['sync'], { cwd: fx.local });
+		const before = JSON.parse(fs.readFileSync(fx.config.stateFile, 'utf8'));
+		before.targets['someone@elsewhere:/other'] = { default: { unstamped: [], files: { 'x.txt': [1, 2] } } };
+		fs.writeFileSync(fx.config.stateFile, JSON.stringify(before));
+		fx.session.end();
+
+		const result = await cli(['forget'], { cwd: fx.local });
+		assert.equal(result.code, 0);
+		assert.match(result.stdout, /forgot 2 files in 1 manifest/);
+
+		const after_ = JSON.parse(fs.readFileSync(fx.config.stateFile, 'utf8'));
+		assert.ok(!after_.targets[fx.config.target], 'this run\'s section is gone');
+		assert.ok(after_.targets['someone@elsewhere:/other'], 'somebody else\'s is not');
+	});
+
+	it('forgets every manifest of the project with --all, and removes the empty file', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' } });
+		after(() => fx.cleanup());
+
+		await cli(['sync'], { cwd: fx.local });
+		fx.session.end();
+		assert.ok(fs.existsSync(fx.config.stateFile));
+
+		const result = await cli(['forget', '--all'], { cwd: fx.local });
+		assert.match(result.stdout, /forgot 1 file in 1 manifest/);
+		assert.equal(fs.existsSync(fx.config.stateFile), false, 'an empty state file is a stale file');
+
+		const again = await cli(['forget'], { cwd: fx.local });
+		assert.match(again.stdout, /nothing recorded/, 'and forgetting twice is not an error');
+		assert.equal(again.code, 0);
+	});
+
+	it('changes nothing on a dry run, and nothing without --force when the config is at stake', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' } });
+		after(() => fx.cleanup());
+
+		await cli(['sync'], { cwd: fx.local });
+		fx.session.end();
+
+		const dry = await cli(['forget', '-n'], { cwd: fx.local });
+		assert.match(dry.stdout, /would forget 1 file/);
+		assert.ok(fs.existsSync(fx.config.stateFile), 'the manifest survives a dry run');
+
+		// The config file is written by hand and nothing rebuilds it, so it lists and waits.
+		const listed = await cli(['forget', '--everything'], { cwd: fx.local });
+		assert.match(listed.stdout, /nothing rebuilds it/);
+		assert.ok(fs.existsSync(fx.configFile), 'and it is still there');
+		assert.ok(fs.existsSync(fx.config.stateFile), 'as is the manifest it did not touch');
+	});
+
+	it('takes the config file too with --everything --force', async () => {
+		const fx = await makeFixture({ files: { 'a.txt': 'a' } });
+		after(() => fx.cleanup());
+
+		await cli(['sync'], { cwd: fx.local });
+		fx.session.end();
+
+		const result = await cli(['forget', '--everything', '--force'], { cwd: fx.local });
+		assert.equal(result.code, 0);
+		assert.match(result.stdout, /removed .*ftporter\.config\.json/);
+		assert.equal(fs.existsSync(fx.configFile), false);
+		assert.equal(fs.existsSync(fx.config.stateFile), false);
+	});
+
 	it('refuses patrol without an interval', async () => {
 		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
 		after(() => fx.cleanup());
