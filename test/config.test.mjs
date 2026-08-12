@@ -342,6 +342,25 @@ describe('cli arguments', () => {
 		assert.equal(opts.dryRun, true);
 	});
 
+	it('accepts --include and --exclude in the --key=value form too', () => {
+		// They were parsed before the `=` form was, so `--exclude=*.log` came back as an unknown
+		// option — for the two flags whose whole job is to be spelled the way .gitignore spells them.
+		const opts = parseArgs(['--include=public/build', '--exclude=*.log', '--exclude', 'vendor']);
+		assert.deepEqual(opts.include, ['public/build']);
+		assert.deepEqual(opts.exclude, ['*.log', 'vendor'], 'and mix with the separate-argument form');
+	});
+
+	it('catches a repeat across the two spellings of the same option', () => {
+		// The `=` form used to skip the repeat check entirely and quietly keep the last one.
+		assert.throws(() => parseArgs(['-t', 'prod', '--target=staging']), /--target given twice/);
+		assert.throws(() => parseArgs(['--profile=a', '-p', 'b']), /-p given twice \('a' and 'b'\)/);
+		assert.equal(parseArgs(['-t', 'prod', '--target=prod']).target, 'prod', 'saying it twice is fine');
+	});
+
+	it('refuses a value attached to a flag that takes none', () => {
+		assert.throws(() => parseArgs(['--dry-run=true']), /--dry-run takes no value/);
+	});
+
 	it('turns --no-delete into delete: false', () => {
 		assert.equal(parseArgs(['--no-delete']).delete, false);
 	});

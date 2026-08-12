@@ -122,34 +122,43 @@ export function parseArgs(argv) {
 	let command = null;
 
 	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
+		// `--name=value` is split before anything looks at the name, so the two spellings of every
+		// option meet the same rules from here on — including the repeat check below, which the
+		// `=` form used to walk straight past.
+		let arg = argv[i];
+		let attached;
+		const eq = arg.startsWith('--') ? arg.indexOf('=') : -1;
+		if (eq > 2) {
+			attached = arg.slice(eq + 1);
+			arg = arg.slice(0, eq);
+		}
+		const value = () => {
+			const given = attached ?? argv[++i];
+			if (given === undefined) throw new UserError(`${arg} needs a value`);
+			return given;
+		};
+
 		if (arg === '--include' || arg === '--exclude') {
-			const value = argv[++i];
-			if (value === undefined) throw new UserError(`${arg} needs a value`);
-			opts[arg === '--include' ? 'include' : 'exclude'].push(value);
+			opts[arg === '--include' ? 'include' : 'exclude'].push(value());
 			continue;
 		}
 		if (VALUES[arg]) {
-			const value = argv[++i];
-			if (value === undefined) throw new UserError(`${arg} needs a value`);
+			const given = value();
 			// Silently keeping the last one turned `-p node -p vendor` into a run against `vendor`
 			// alone, which looks like both were used until the file list says otherwise.
-			if (opts[VALUES[arg]] !== undefined && opts[VALUES[arg]] !== value) {
+			if (opts[VALUES[arg]] !== undefined && opts[VALUES[arg]] !== given) {
 				throw new UserError(
-					`${arg} given twice ('${opts[VALUES[arg]]}' and '${value}')`,
+					`${arg} given twice ('${opts[VALUES[arg]]}' and '${given}')`,
 					'Only one can apply — run the command once for each.',
 				);
 			}
-			opts[VALUES[arg]] = value;
-			continue;
-		}
-		// --key=value form
-		const eq = arg.indexOf('=');
-		if (arg.startsWith('--') && eq > 2 && VALUES[arg.slice(0, eq)]) {
-			opts[VALUES[arg.slice(0, eq)]] = arg.slice(eq + 1);
+			opts[VALUES[arg]] = given;
 			continue;
 		}
 		if (FLAGS[arg]) {
+			// `--dry-run=true` is a misunderstanding worth naming: the flag would come out true either
+			// way, so accepting it silently teaches a spelling that does nothing.
+			if (attached !== undefined) throw new UserError(`${arg} takes no value (got '${attached}')`);
 			opts[FLAGS[arg]] = true;
 			continue;
 		}

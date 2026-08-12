@@ -78,6 +78,13 @@ untouched. To be explicit either way: `ftporter sync` is the one pass, `ftporter
 
 - `ftporter init` now states `atomicUpload: true` in the generated config, rather than leaving it
   to the default: it is worth knowing you have it before you decide to turn it off.
+- **Fixed `--include=<glob>` and `--exclude=<glob>`** coming back as `unknown option`. Those two
+  were read before the `--name=value` form was, so only the separate-argument spelling reached
+  them — for the pair whose whole job is to be written the way `.gitignore` writes them.
+- **Fixed `--name=value` skipping the repeated-option check**, so `-t prod --target=staging` quietly
+  ran against `staging` alone. Both spellings now meet the same rules, and a repeat is the error it
+  has been since 1.2.0. A value attached to a flag that takes none (`--dry-run=true`) says so
+  instead of being read as an unknown option.
 
 ### 1.2.0
 

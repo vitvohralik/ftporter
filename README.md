@@ -224,6 +224,10 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `--host` `--user` `--port` `--remote-root` `--key` `--password` | Override the connection for one run |
 | `-v, --verbose` / `-q, --quiet` / `--json` | Output control |
 
+Every option that takes a value accepts either spelling: `-t prod`, `--target prod`,
+`--target=prod`. Giving the same one twice is an error rather than a silent last-one-wins —
+`--include` and `--exclude` are the two meant to repeat.
+
 `--json` prints a machine-readable result and suppresses everything else — handy in CI. For a sync
 that is `{ ok, target, profile, files, uploaded, deleted, failed, uploads, deletes, ms }`; for
 `list` it is `{ ok, path, entries }`.
