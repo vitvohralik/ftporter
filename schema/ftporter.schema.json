@@ -16,6 +16,38 @@
         { "type": "array", "items": { "type": "string" } }
       ]
     },
+    "connection": {
+      "type": "object",
+      "description": "Where to upload to. Always the \"server\" key, with \"protocol\" inside it.",
+      "properties": {
+        "protocol": { "enum": ["sftp", "ftps", "ftp", "ftps-implicit"] },
+        "host": { "type": "string" },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Defaults to the protocol's port: 22 for SFTP, 21 for FTP and FTPS, 990 for implicit FTPS."
+        },
+        "username": { "type": "string" },
+        "remoteRoot": { "type": "string" },
+        "password": { "type": ["string", "null"] },
+        "privateKey": { "type": ["string", "null"], "description": "SFTP only." },
+        "passphrase": { "type": ["string", "null"], "description": "SFTP only." },
+        "agent": { "type": ["string", "null"], "description": "SFTP only." },
+        "readyTimeout": { "type": "integer" },
+        "keepaliveInterval": { "type": "integer", "description": "SFTP only." },
+        "rejectUnauthorized": {
+          "type": "boolean",
+          "description": "FTPS only. False accepts a self-signed server certificate."
+        },
+        "connections": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "FTP/FTPS only: how many control connections to open in parallel."
+        }
+      },
+      "additionalProperties": false
+    },
     "settings": {
       "type": "object",
       "properties": {
@@ -67,22 +99,11 @@
           },
           "additionalProperties": false
         },
-        "sftp": {
-          "type": "object",
-          "properties": {
-            "host": { "type": "string" },
-            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-            "username": { "type": "string" },
-            "remoteRoot": { "type": "string" },
-            "privateKey": { "type": ["string", "null"] },
-            "passphrase": { "type": ["string", "null"] },
-            "password": { "type": ["string", "null"] },
-            "agent": { "type": ["string", "null"] },
-            "readyTimeout": { "type": "integer" },
-            "keepaliveInterval": { "type": "integer" }
-          },
-          "additionalProperties": false
-        }
+        "protocol": {
+          "enum": ["sftp", "ftps", "ftp", "ftps-implicit"],
+          "description": "How to reach the server. Defaults to sftp when omitted. \"ftps\" requires TLS, \"ftp\" upgrades to TLS only when the server offers it."
+        },
+        "server": { "$ref": "#/definitions/connection" }
       }
     }
   },

@@ -19,7 +19,7 @@ async function withConfig(contents, cli = {}, env = {}) {
 }
 
 const minimal = {
-	sftp: { host: 'h', username: 'u', remoteRoot: '/srv/app', password: 'p' },
+	server: { protocol: 'sftp', host: 'h', username: 'u', remoteRoot: '/srv/app', password: 'p' },
 };
 
 describe('config', () => {
@@ -31,7 +31,7 @@ describe('config', () => {
 		assert.equal(config.delete, true);
 		assert.equal(config.deleteCap, 50);
 		assert.equal(config.target, 'u@h:/srv/app');
-		assert.equal(config.sftp.port, 22);
+		assert.equal(config.connection.port, 22);
 	});
 
 	it('applies targets and profiles over the base, CLI over both', async () => {
@@ -39,14 +39,14 @@ describe('config', () => {
 			{
 				...minimal,
 				deleteCap: 10,
-				targets: { prod: { sftp: { host: 'prod.example', remoteRoot: '/var/www' }, delete: false } },
+				targets: { prod: { server: { host: 'prod.example', remoteRoot: '/var/www' }, delete: false } },
 				profiles: { assets: { strategy: 'whitelist', include: ['public/build'], deleteCap: 500 } },
 			},
 			{ target: 'prod', profile: 'assets', strategy: 'blacklist' },
 		);
 		after(cleanup);
 
-		assert.equal(config.sftp.host, 'prod.example', 'target wins over the base');
+		assert.equal(config.connection.host, 'prod.example', 'target wins over the base');
 		assert.equal(config.delete, false);
 		assert.equal(config.deleteCap, 500, 'profile wins over the target');
 		assert.equal(config.strategy, 'blacklist', 'CLI wins over everything');
@@ -74,18 +74,18 @@ describe('config', () => {
 
 	it('reads secrets from the environment', async () => {
 		const { config, cleanup } = await withConfig(
-			{ sftp: { host: 'h', username: 'u', remoteRoot: '/x', password: '${DEPLOY_PW}' } },
+			{ server: { protocol: 'sftp', host: 'h', username: 'u', remoteRoot: '/x', password: '${DEPLOY_PW}' } },
 			{},
 			{ DEPLOY_PW: 'hunter2' },
 		);
 		after(cleanup);
 
-		assert.equal(config.sftp.password, 'hunter2');
+		assert.equal(config.connection.password, 'hunter2');
 	});
 
 	it('rejects a config with no way to authenticate', async () => {
 		await assert.rejects(
-			withConfig({ sftp: { host: 'h', username: 'u', remoteRoot: '/x' } }),
+			withConfig({ server: { protocol: 'sftp', host: 'h', username: 'u', remoteRoot: '/x' } }),
 			/no authentication configured/,
 		);
 	});
@@ -114,6 +114,174 @@ describe('config', () => {
 		const { config, cleanup } = await withConfig({ ...minimal, root: '.' });
 		after(cleanup);
 		assert.equal(config.root, path.dirname(config.configFile));
+	});
+});
+
+describe('protocol', () => {
+	const credentials = { host: 'h', username: 'u', remoteRoot: '/srv/app', password: 'p' };
+
+	it('defaults to sftp, as every config written before this did', async () => {
+		const { config, cleanup } = await withConfig(minimal);
+		after(cleanup);
+
+		assert.equal(config.protocol, 'sftp');
+		assert.equal(config.connection.port, 22);
+		assert.equal(config.sftp, undefined, 'and the 1.x alias is gone with the 1.x block');
+	});
+
+	it('takes the protocol from inside the server block, port and all', async () => {
+		for (const [protocol, port] of [
+			['ftp', 21],
+			['ftps', 21],
+			['ftps-implicit', 990],
+		]) {
+			const { config, cleanup } = await withConfig({ server: { protocol, ...credentials } });
+			after(cleanup);
+
+			assert.equal(config.protocol, protocol);
+			assert.equal(config.connection.port, port, 'and the port that goes with it');
+			assert.equal(config.connection.host, 'h');
+		}
+	});
+
+	it('accepts the protocol spelled the other common ways', async () => {
+		for (const spelling of ['FTPS', 'ftpes', 'ftp-tls', 'ftps-explicit']) {
+			const { config, cleanup } = await withConfig({ server: { protocol: spelling, ...credentials } });
+			after(cleanup);
+			assert.equal(config.protocol, 'ftps', `${spelling} is FTPS`);
+		}
+	});
+
+	it('keeps an explicit port and an explicit protocol', async () => {
+		const { config, cleanup } = await withConfig({
+			server: { protocol: 'ftps-implicit', ...credentials, port: 9990 },
+		});
+		after(cleanup);
+
+		assert.equal(config.protocol, 'ftps-implicit');
+		assert.equal(config.connection.port, 9990);
+	});
+
+	it('lets a target switch protocol without touching the base', async () => {
+		const file = {
+			server: { protocol: 'sftp', ...credentials, privateKey: null },
+			targets: { shared: { server: { protocol: 'ftps', host: 'ftp.example', username: 'web', password: 'p', remoteRoot: '/www' } } },
+		};
+
+		const base = await withConfig(file);
+		after(base.cleanup);
+		assert.equal(base.config.protocol, 'sftp');
+
+		const shared = await withConfig(file, { target: 'shared' });
+		after(shared.cleanup);
+		assert.equal(shared.config.protocol, 'ftps');
+		assert.equal(shared.config.connection.host, 'ftp.example');
+		assert.equal(shared.config.target, 'ftps://web@ftp.example:/www');
+	});
+
+	it('takes --protocol and FTPORTER_PROTOCOL over what the file says', async () => {
+		const cli = await withConfig({ server: { protocol: 'ftp', ...credentials } }, { protocol: 'ftps' });
+		after(cli.cleanup);
+		assert.equal(cli.config.protocol, 'ftps');
+
+		const env = await withConfig({ server: { protocol: 'ftp', ...credentials } }, {}, { FTPORTER_PROTOCOL: 'ftps' });
+		after(env.cleanup);
+		assert.equal(env.config.protocol, 'ftps');
+	});
+
+	it('refuses a 1.x connection block, and says which level it sits on', async () => {
+		await assert.rejects(
+			withConfig({ sftp: credentials }),
+			/the configuration uses the 1.x connection block "sftp"/,
+			'ignoring it would drop the host and the credentials and blame a missing server.host',
+		);
+		await assert.rejects(
+			withConfig({ server: { protocol: 'sftp', ...credentials }, targets: { prod: { ftps: credentials } } }),
+			/target "prod" uses the 1.x connection block "ftps"/,
+		);
+		await assert.rejects(
+			withConfig({ server: { protocol: 'sftp', ...credentials }, profiles: { assets: { ftp: credentials } } }),
+			/profile "assets" uses the 1.x connection block "ftp"/,
+		);
+		await assert.rejects(
+			withConfig({ server: { protocol: 'sftp', ...credentials }, targets: { prod: { profiles: { a: { connection: credentials } } } } }),
+			/profile "a" of target "prod" uses the 1.x connection block "connection"/,
+		);
+	});
+
+	it('names the protocol to move to in the hint', async () => {
+		await assert.rejects(withConfig({ ftps: credentials }), (err) => {
+			assert.match(err.hint, /"server": \{ "protocol": "ftps", … \}/);
+			return true;
+		});
+	});
+
+	it('reports a 1.x block in a target nobody selected on this run', async () => {
+		await assert.rejects(
+			withConfig({ server: { protocol: 'sftp', ...credentials }, targets: { broken: { sftp: credentials } } }),
+			/target "broken" uses the 1.x connection block/,
+			"a config is broken whether or not today's run happens to reach that target",
+		);
+	});
+
+	it('rejects an unknown protocol', async () => {
+		await assert.rejects(withConfig({ server: { protocol: 'scp', ...credentials } }), /unknown protocol 'scp'/);
+	});
+
+	it('retires the port and the SSH keys a target left behind when it changed protocol', async () => {
+		// The everyday shape: a keyed SFTP base on port 22, one shared-hosting target over FTPS.
+		// Neither the key nor the port was written for that server, and both would break it.
+		const file = {
+			server: { protocol: 'sftp', ...credentials, port: 22, privateKey: '~/.ssh/id_rsa', agent: '/tmp/agent' },
+			targets: { shared: { server: { protocol: 'ftps', host: 'ftp.example', username: 'web', password: 'p', remoteRoot: '/www' } } },
+		};
+
+		const { config, cleanup } = await withConfig(file, { target: 'shared' });
+		after(cleanup);
+		assert.equal(config.protocol, 'ftps');
+		assert.equal(config.connection.port, 21, 'the port follows the protocol that is actually in use');
+		assert.equal(config.connection.privateKey, null);
+		assert.equal(config.connection.agent, null);
+		assert.equal(config.connection.password, 'p', 'what the target does say still applies');
+	});
+
+	it('keeps a port and a key a target did not contradict', async () => {
+		const file = {
+			server: { protocol: 'sftp', ...credentials, port: 2222, privateKey: '/tmp/id_test', password: null },
+			targets: {
+				staging: { server: { host: 'staging.example' } },
+				same: { server: { protocol: 'sftp', host: 'same.example' } },
+			},
+		};
+		fs.writeFileSync('/tmp/id_test', 'x');
+
+		for (const target of ['staging', 'same']) {
+			const { config, cleanup } = await withConfig(file, { target });
+			after(cleanup);
+			assert.equal(config.connection.port, 2222, `${target}: restating the same protocol retires nothing`);
+			assert.equal(config.connection.privateKey, '/tmp/id_test', 'the key is for the same protocol');
+		}
+	});
+
+	it('keeps a port given alongside the protocol on the same layer', async () => {
+		const cli = await withConfig({ server: { protocol: 'sftp', ...credentials } }, { protocol: 'ftps', port: 9021 });
+		after(cli.cleanup);
+		assert.equal(cli.config.connection.port, 9021);
+	});
+
+	it('rejects SSH-only settings on an FTP connection', async () => {
+		await assert.rejects(
+			withConfig({ server: { protocol: 'ftp', ...credentials, privateKey: '~/.ssh/id_rsa' } }),
+			/server.privateKey is an SFTP setting/,
+		);
+	});
+
+	it('needs a password unless the login is anonymous', async () => {
+		await assert.rejects(withConfig({ server: { protocol: 'ftp', host: 'h', username: 'u', remoteRoot: '/x' } }), /no password configured/);
+
+		const { config, cleanup } = await withConfig({ server: { protocol: 'ftp', host: 'h', username: 'anonymous', remoteRoot: '/x' } });
+		after(cleanup);
+		assert.equal(config.protocol, 'ftp');
 	});
 });
 

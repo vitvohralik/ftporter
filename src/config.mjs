@@ -19,6 +19,32 @@ export const CONFIG_NAMES = [
 
 export const STRATEGIES = ['git', 'whitelist', 'blacklist'];
 
+/**
+ * How to reach the server, in FileZilla's terms:
+ *   sftp          — SSH file transfer. The original behaviour and still the default.
+ *   ftps          — FTP with explicit TLS, required: a server that cannot do TLS is an error.
+ *   ftp           — plain FTP that still upgrades to TLS whenever the server offers it, and only
+ *                   falls back to an unencrypted session when it does not.
+ *   ftps-implicit — legacy FTPS, TLS from the first byte (usually port 990).
+ */
+export const PROTOCOLS = ['sftp', 'ftps', 'ftp', 'ftps-implicit'];
+
+export const DEFAULT_PORTS = { sftp: 22, ftps: 21, ftp: 21, 'ftps-implicit': 990 };
+
+/** The one block that carries connection settings, at every level of the file. */
+const CONNECTION_BLOCK = 'server';
+
+/**
+ * Block names 1.x used, where the name itself picked the protocol. They are refused rather than
+ * silently ignored: a `"sftp"` block left in place would drop the host, the credentials and the
+ * remote root in one go, and the run would fail with "missing server.host" — which says nothing
+ * about the block sitting right there in the file.
+ */
+const LEGACY_BLOCKS = ['sftp', 'ftps', 'ftp', 'connection'];
+
+/** Connection settings that only mean anything over SSH. */
+const SSH_ONLY = ['privateKey', 'passphrase', 'agent'];
+
 /** Directories a walk never descends into, on top of whatever the user configures. */
 export const DEFAULT_IGNORED = ['.git', '.svn', '.hg', '.DS_Store', '.idea', '.vscode', ...CONFIG_NAMES];
 
@@ -44,11 +70,14 @@ export const DEFAULTS = {
 		pollInterval: 400,
 	},
 	hooks: { beforeSync: null, afterSync: null, onError: null },
-	sftp: {
+	protocol: 'sftp',
+	connection: {
 		host: null,
-		port: 22,
+		// null means "whatever the protocol uses" — 22 for SFTP, 21 for FTP/FTPS, 990 for implicit.
+		port: null,
 		username: null,
 		remoteRoot: null,
+		// SFTP only.
 		privateKey: null,
 		passphrase: null,
 		password: null,
@@ -56,6 +85,9 @@ export const DEFAULTS = {
 		readyTimeout: 20_000,
 		keepaliveInterval: 10_000,
 		strictHostKey: false,
+		// FTP only.
+		rejectUnauthorized: true,
+		connections: 4,
 	},
 	stateFile: null,
 	profiles: {},
@@ -131,7 +163,7 @@ export function interpolate(value, env = process.env) {
 
 /** Env overrides applied last but one, before CLI flags. */
 function envOverrides(env = process.env) {
-	const sftp = {};
+	const connection = {};
 	const map = {
 		FTPORTER_HOST: 'host',
 		FTPORTER_PORT: 'port',
@@ -144,13 +176,87 @@ function envOverrides(env = process.env) {
 		FTPORTER_AGENT: 'agent',
 	};
 	for (const [name, key] of Object.entries(map)) {
-		if (env[name]) sftp[key] = key === 'port' ? Number(env[name]) : env[name];
+		if (env[name]) connection[key] = key === 'port' ? Number(env[name]) : env[name];
 	}
 	const out = {};
-	if (Object.keys(sftp).length) out.sftp = sftp;
+	if (Object.keys(connection).length) out.connection = connection;
 	if (env.FTPORTER_ROOT) out.root = env.FTPORTER_ROOT;
 	if (env.FTPORTER_STRATEGY) out.strategy = env.FTPORTER_STRATEGY;
+	if (env.FTPORTER_PROTOCOL) out.protocol = env.FTPORTER_PROTOCOL;
 	return out;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Connection block
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Folds a layer's `server` block into the internal `connection` block.
+ *
+ * One block name at every level, and `"protocol"` inside it says how to get there. 1.x picked the
+ * protocol from the block's *name* — `"sftp"`, `"ftp"`, `"ftps"` — which meant a target could not
+ * change protocol without being rewritten, implicit FTPS had no name at all, and every layer of the
+ * merge had to agree on which of four keys it was looking at. `"protocol"` is a value like any
+ * other, so it merges, a target overrides it, and `--protocol` can override that in turn.
+ */
+function normalizeLayer(layer, where = 'the configuration') {
+	const { profiles, targets, defaultTarget, $schema, protocol, ...rest } = layer ?? {};
+
+	checkLegacyBlocks(layer, where);
+	delete rest[CONNECTION_BLOCK];
+
+	const out = rest;
+	if (protocol) out.protocol = normalizeProtocol(protocol);
+	if (isPlainObject(layer?.[CONNECTION_BLOCK])) {
+		const { protocol: inner, ...fields } = layer[CONNECTION_BLOCK];
+		out.connection = fields;
+		if (inner) out.protocol = normalizeProtocol(inner);
+	}
+	return out;
+}
+
+/**
+ * Stops on a 1.x connection block instead of quietly ignoring it.
+ *
+ * `where` names the level, since `targets` and `profiles` may each carry their own block and "which
+ * one of them" is the whole question when this fires.
+ */
+function checkLegacyBlocks(layer, where) {
+	// In the order the file writes them, so the message reads like the config the user is looking at.
+	const found = Object.keys(layer ?? {}).filter((name) => LEGACY_BLOCKS.includes(name) && isPlainObject(layer[name]));
+	if (found.length === 0) return;
+
+	const protocol = found.find((name) => PROTOCOLS.includes(name)) ?? 'sftp';
+	throw new UserError(
+		`${where} uses the 1.x connection block ${found.map((name) => `"${name}"`).join(' and ')}`,
+		`Rename it to "server" and say the protocol inside it: "server": { "protocol": "${protocol}", … }.` +
+			' See the 2.0.0 entry in the changelog.',
+	);
+}
+
+/**
+ * Every level of the file, whether this run selects it or not.
+ *
+ * A legacy block inside `targets.prod` is a broken config the moment it is written, not the moment
+ * somebody happens to run `--target prod`, and finding it then means finding it in production.
+ */
+function checkConnectionBlocks(file) {
+	checkLegacyBlocks(file, 'the configuration');
+	for (const [name, profile] of Object.entries(file.profiles ?? {})) {
+		checkLegacyBlocks(profile, `profile "${name}"`);
+	}
+	for (const [name, target] of Object.entries(file.targets ?? {})) {
+		checkLegacyBlocks(target, `target "${name}"`);
+		for (const [inner, profile] of Object.entries(target?.profiles ?? {})) {
+			checkLegacyBlocks(profile, `profile "${inner}" of target "${name}"`);
+		}
+	}
+}
+
+function normalizeProtocol(value) {
+	const name = String(value).trim().toLowerCase();
+	const alias = { ftpes: 'ftps', 'ftp-tls': 'ftps', 'ftps-explicit': 'ftps', 'implicit-ftps': 'ftps-implicit' }[name];
+	return alias ?? name;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -184,6 +290,10 @@ export async function loadConfig(cli = {}, { cwd = process.cwd(), env = process.
 		);
 	}
 
+	// Checked across the whole file before anything is selected: a target nobody asked for today is
+	// still broken, and it should say so now rather than on the run that first reaches for it.
+	checkConnectionBlocks(file);
+
 	const targetName = cli.target ?? env.FTPORTER_TARGET ?? file.defaultTarget ?? null;
 	const targets = file.targets ?? {};
 	if (targetName && !targets[targetName]) {
@@ -200,10 +310,44 @@ export async function loadConfig(cli = {}, { cwd = process.cwd(), env = process.
 	}
 	const profile = profileName === 'default' ? (profiles.default ?? {}) : profiles[profileName];
 
-	let resolved = DEFAULTS;
-	for (const layer of [stripMeta(file), stripMeta(target), stripMeta(profile), envOverrides(env), cliOverrides(cli)]) {
-		resolved = merge(resolved, layer);
+	const layers = [
+		normalizeLayer(file),
+		normalizeLayer(target, `target "${targetName}"`),
+		normalizeLayer(profile, `profile "${profileName}"`),
+		envOverrides(env),
+		cliOverrides(cli),
+	];
+	let resolved = { ...DEFAULTS };
+	for (const layer of layers) resolved = merge(resolved, layer);
+
+	const protocol = resolved.protocol ?? DEFAULTS.protocol;
+	if (!PROTOCOLS.includes(protocol)) {
+		throw new UserError(`unknown protocol '${protocol}' (use: ${PROTOCOLS.join(', ')})`);
 	}
+
+	/**
+	 * Whether a protocol-specific setting was written for a protocol this run is not using.
+	 *
+	 * The everyday case is a keyed SFTP base with one FTPS target for shared hosting. Merging alone
+	 * would hand that target port 22 and the SSH key from the block below it — settings written for
+	 * a server it has nothing to do with, one of which is nonsense over FTP and the other of which
+	 * `validate` rightly refuses to pretend is in use. So each of them is read together with the
+	 * protocol that was in force where it was written, and dropped when the two disagree.
+	 *
+	 * Asked only about the port and the three SSH-only keys: the host, the username, the remote root
+	 * and the password mean the same thing whichever protocol carries them, and retiring those would
+	 * break a target that changes nothing but the protocol. And naming an SSH key and an FTP
+	 * protocol in the *same* block is still the mistake it looks like — same layer, same protocol,
+	 * nothing retired, and the run stops.
+	 */
+	const protocolIn = (upTo) => {
+		for (let at = upTo; at >= 0; at--) if (layers[at].protocol != null) return layers[at].protocol;
+		return DEFAULTS.protocol;
+	};
+	const outdated = (key) => {
+		const at = layers.reduce((last, layer, index) => (layer.connection?.[key] != null ? index : last), -1);
+		return at !== -1 && protocolIn(at) !== protocol;
+	};
 
 	const baseDir = configFile ? path.dirname(configFile) : cwd;
 	const root = path.resolve(baseDir, expandHome(cli.root ?? resolved.root ?? '.'));
@@ -215,6 +359,7 @@ export async function loadConfig(cli = {}, { cwd = process.cwd(), env = process.
 
 	const config = {
 		...resolved,
+		protocol,
 		include,
 		exclude,
 		configFile,
@@ -222,11 +367,15 @@ export async function loadConfig(cli = {}, { cwd = process.cwd(), env = process.
 		targetName,
 		profileName,
 		label: profileName === 'default' ? 'files' : profileName,
-		sftp: {
-			...resolved.sftp,
-			privateKey: resolved.sftp.privateKey ? expandHome(resolved.sftp.privateKey) : null,
-			port: Number(resolved.sftp.port) || 22,
-			remoteRoot: normalizeRemote(resolved.sftp.remoteRoot),
+		connection: {
+			...resolved.connection,
+			...Object.fromEntries(SSH_ONLY.filter(outdated).map((key) => [key, null])),
+			privateKey:
+				resolved.connection.privateKey && !outdated('privateKey')
+					? expandHome(resolved.connection.privateKey)
+					: null,
+			port: (!outdated('port') && Number(resolved.connection.port)) || DEFAULT_PORTS[protocol],
+			remoteRoot: normalizeRemote(resolved.connection.remoteRoot),
 		},
 		watch: {
 			...resolved.watch,
@@ -239,27 +388,26 @@ export async function loadConfig(cli = {}, { cwd = process.cwd(), env = process.
 	};
 
 	config.stateFile = resolveStateFile(config);
-	config.target = `${config.sftp.username}@${config.sftp.host}:${config.sftp.remoteRoot}`;
+	// The SFTP form is left exactly as it was: this string keys the manifest, and changing it would
+	// silently orphan every state file already on disk.
+	const where = `${config.connection.username}@${config.connection.host}:${config.connection.remoteRoot}`;
+	config.target = protocol === 'sftp' ? where : `${protocol}://${where}`;
 	validate(config);
 	return config;
 }
 
-/** Keys that only steer resolution and must not leak into the resolved config. */
-const stripMeta = (layer) => {
-	const { profiles, targets, defaultTarget, $schema, ...rest } = layer ?? {};
-	return rest;
-};
-
 function cliOverrides(cli) {
 	const out = {};
-	const sftp = {};
-	if (cli.host) sftp.host = cli.host;
-	if (cli.port) sftp.port = Number(cli.port);
-	if (cli.username) sftp.username = cli.username;
-	if (cli.remoteRoot) sftp.remoteRoot = cli.remoteRoot;
-	if (cli.key) sftp.privateKey = cli.key;
-	if (Object.keys(sftp).length) out.sftp = sftp;
+	const connection = {};
+	if (cli.host) connection.host = cli.host;
+	if (cli.port) connection.port = Number(cli.port);
+	if (cli.username) connection.username = cli.username;
+	if (cli.remoteRoot) connection.remoteRoot = cli.remoteRoot;
+	if (cli.key) connection.privateKey = cli.key;
+	if (cli.password) connection.password = cli.password;
+	if (Object.keys(connection).length) out.connection = connection;
 
+	if (cli.protocol) out.protocol = normalizeProtocol(cli.protocol);
 	if (cli.strategy) out.strategy = cli.strategy;
 	if (cli.delete === false) out.delete = false;
 	if (cli.delete === true) out.delete = true;
@@ -292,8 +440,9 @@ function resolveStateFile(config) {
 }
 
 function validate(config) {
+	const { protocol } = config;
 	for (const key of ['host', 'username', 'remoteRoot']) {
-		if (!config.sftp[key]) throw new UserError(`missing sftp.${key} in the configuration`);
+		if (!config.connection[key]) throw new UserError(`missing server.${key} in the configuration`);
 	}
 	if (!STRATEGIES.includes(config.strategy)) {
 		throw new UserError(`unknown strategy '${config.strategy}' (use: ${STRATEGIES.join(', ')})`);
@@ -305,14 +454,35 @@ function validate(config) {
 			'Whitelist uploads only what you list, so an empty list would upload nothing.',
 		);
 	}
-	if (config.sftp.privateKey && !fs.existsSync(config.sftp.privateKey)) {
-		throw new UserError(`private key not found: ${config.sftp.privateKey}`);
-	}
-	if (!config.sftp.privateKey && !config.sftp.password && !config.sftp.agent) {
-		throw new UserError(
-			'no authentication configured — set sftp.privateKey, sftp.password or sftp.agent',
-			'Typically: "privateKey": "~/.ssh/id_rsa", or "agent": "${SSH_AUTH_SOCK}".',
-		);
+	if (protocol === 'sftp') {
+		if (config.connection.privateKey && !fs.existsSync(config.connection.privateKey)) {
+			throw new UserError(`private key not found: ${config.connection.privateKey}`);
+		}
+		if (!config.connection.privateKey && !config.connection.password && !config.connection.agent) {
+			throw new UserError(
+				'no authentication configured — set server.privateKey, server.password or server.agent',
+				'Typically: "privateKey": "~/.ssh/id_rsa", or "agent": "${SSH_AUTH_SOCK}".',
+			);
+		}
+	} else {
+		// Keys are an SSH concept; silently ignoring one here would look like it was in use.
+		for (const key of SSH_ONLY) {
+			if (config.connection[key]) {
+				throw new UserError(
+					`server.${key} is an SFTP setting and does nothing over ${protocol.toUpperCase()}`,
+					'FTP authenticates with a username and a password. Use "protocol": "sftp" for key authentication.',
+				);
+			}
+		}
+		if (!config.connection.password && config.connection.username !== 'anonymous') {
+			throw new UserError(
+				'no password configured — set server.password',
+				'Keep it out of the file with "password": "${DEPLOY_PASSWORD}", or use "username": "anonymous".',
+			);
+		}
+		if (!(Number(config.connection.connections) > 0)) {
+			throw new UserError('server.connections must be at least 1');
+		}
 	}
 	if (config.watch.interval !== null && config.watch.interval < 1000) {
 		throw new UserError('watch.interval must be at least 1s');
@@ -325,22 +495,35 @@ function validate(config) {
 
 export const CONFIG_TEMPLATE = `{
   // ftporter configuration — https://github.com/vitvohralik/ftporter
-  // Everything below is optional except the "sftp" block.
+  // Everything below is optional except the "server" block.
 
   // Project root that gets uploaded. Relative to this file.
   "root": ".",
 
-  "sftp": {
+  // ── Connection ────────────────────────────────────────────────────────────
+  "server": {
+    // "protocol" picks the transport:
+    //   "sftp"  — file transfer over SSH (port 22)                                      [default]
+    //   "ftps"  — FTP with TLS, required: no TLS on the server means no upload (port 21)
+    //   "ftp"   — FTP that upgrades to TLS when the server offers it, plain when it does not
+    //   "ftps-implicit" — legacy FTPS encrypted from the first byte (port 990)
+    "protocol": "sftp",
+
     "host": "example.com",
     "port": 22,
     "username": "deploy",
     "remoteRoot": "/var/www/example",
 
     // Key auth (passphrase-free key, or set "passphrase"). "~/" expands to your home directory.
+    // SFTP only — FTP and FTPS log in with a password.
     "privateKey": "~/.ssh/id_rsa",
 
     // Anything can read from the environment: "password": "\${DEPLOY_PASSWORD}"
     // or use the running ssh-agent: "agent": "\${SSH_AUTH_SOCK}"
+
+    // FTP/FTPS only:
+    // "rejectUnauthorized": false   // accept a self-signed certificate
+    // "connections": 4              // parallel FTP connections (servers often cap these)
   },
 
   // How the file list is decided:
@@ -369,9 +552,11 @@ export const CONFIG_TEMPLATE = `{
     // "assets": { "strategy": "whitelist", "include": ["public/build", "public/css"], "deleteCap": 500 }
   },
 
-  // Named servers, picked with --target <name>. Each one overrides the settings above.
+  // Named servers, picked with --target <name>. Each one overrides the settings above,
+  // protocol included — a target may use a different one than the block above.
   "targets": {
-    // "prod": { "sftp": { "host": "prod.example.com", "remoteRoot": "/var/www/prod" }, "delete": false }
+    // "prod": { "server": { "host": "prod.example.com", "remoteRoot": "/var/www/prod" }, "delete": false },
+    // "shared": { "server": { "protocol": "ftps", "host": "ftp.example.com", "username": "web123", "password": "\${FTP_PASSWORD}", "remoteRoot": "/www" } }
   }
 }
 `;

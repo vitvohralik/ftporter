@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_NAMES, CONFIG_TEMPLATE, loadConfig, STRATEGIES } from './config.mjs';
+import { CONFIG_NAMES, CONFIG_TEMPLATE, loadConfig, PROTOCOLS, STRATEGIES } from './config.mjs';
 import { prune, reconcile } from './engine.mjs';
 import { runHook } from './hooks.mjs';
 import { color, createLogger } from './logger.mjs';
-import { SftpSession } from './sftp.mjs';
+import { openSession } from './session.mjs';
 import { runWatch } from './watch.mjs';
 import { formatDuration, parseDuration, UserError } from './util.mjs';
 
@@ -14,7 +14,7 @@ const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.ur
 const COMMANDS = ['sync', 'watch', 'patrol', 'status', 'prune', 'test', 'init', 'config'];
 
 const HELP = `
-${color.bold}ftporter${color.reset} — your files' porter: SFTP deploy, watcher and interval patrol
+${color.bold}ftporter${color.reset} — your files' porter: SFTP/FTPS/FTP deploy, watcher and interval patrol
 
   Usage: ftporter [command] [options]
 
@@ -38,13 +38,14 @@ ${color.bold}Options${color.reset}
   -w, --watch             Same as the watch command
   -i, --interval <time>   Full pass every 30s / 5m / 1h ${color.dim}(with watch or patrol)${color.reset}
       --strategy <name>   ${STRATEGIES.join(' | ')}
+      --protocol <name>   ${PROTOCOLS.join(' | ')} ${color.dim}(default: sftp, or what "server" says)${color.reset}
       --include <glob>    Extra path to upload ${color.dim}(repeatable, added to the config)${color.reset}
       --exclude <glob>    Extra path to skip ${color.dim}(repeatable, wins over include)${color.reset}
       --no-delete         Upload only, never delete
       --no-atomic         Write straight onto the target (faster, unsafe while in use)
       --temp              With prune: only .ftporter-tmp.* leftovers, anywhere on the server
   -f, --force             Allow a delete count over the cap; confirm prune
-      --host/--user/--port/--remote-root/--key   Override the connection for one run
+      --host/--user/--password/--port/--remote-root/--key   Override the connection for one run
   -v, --verbose           Show timings
   -q, --quiet             Only errors
       --json              Print a JSON summary instead of the usual output
@@ -57,6 +58,7 @@ ${color.bold}Examples${color.reset}
   ftporter patrol -i 5m             ${color.dim}# full pass every five minutes${color.reset}
   ftporter -t prod -n               ${color.dim}# what would go to production?${color.reset}
   ftporter -p assets --no-delete    ${color.dim}# just the build output${color.reset}
+  ftporter --protocol ftps          ${color.dim}# same config, over FTP with TLS${color.reset}
 
   Docs: https://github.com/vitvohralik/ftporter
 `;
@@ -92,12 +94,14 @@ const VALUES = {
 	'--interval': 'interval',
 	'-i': 'interval',
 	'--strategy': 'strategy',
+	'--protocol': 'protocol',
 	'--host': 'host',
 	'--user': 'username',
 	'--username': 'username',
 	'--port': 'port',
 	'--remote-root': 'remoteRoot',
 	'--key': 'key',
+	'--password': 'password',
 };
 
 export function parseArgs(argv) {
@@ -183,7 +187,7 @@ export async function run(argv) {
 	logger.trace(`config ${config.configFile ?? '(none)'} · root ${config.root} · strategy ${config.strategy}`);
 	logger.status('  connecting…');
 
-	const session = await SftpSession.open(config, logger);
+	const session = await openSession(config, logger);
 	let exitCode = 0;
 	try {
 		switch (opts.command) {
@@ -243,7 +247,7 @@ const summarize = (config, result) => ({
 async function testConnection(session, config, logger) {
 	logger.ok(`connected to ${config.target}`);
 
-	const parts = config.sftp.remoteRoot.split('/').filter(Boolean);
+	const parts = config.connection.remoteRoot.split('/').filter(Boolean);
 	let base = null;
 	for (let depth = parts.length; depth >= 0; depth--) {
 		const abs = `/${parts.slice(0, depth).join('/')}`;
@@ -251,12 +255,12 @@ async function testConnection(session, config, logger) {
 		if (!list) continue;
 		base = abs;
 		if (depth === parts.length) logger.dim(`  remote root exists, ${list.length} entries`);
-		else logger.warn(`remote root ${config.sftp.remoteRoot} does not exist yet — the first upload would create it`);
+		else logger.warn(`remote root ${config.connection.remoteRoot} does not exist yet — the first upload would create it`);
 		break;
 	}
 
 	if (base === null) {
-		logger.warn(`cannot read any part of ${config.sftp.remoteRoot}`);
+		logger.warn(`cannot read any part of ${config.connection.remoteRoot}`);
 	} else {
 		const probe = `${base === '/' ? '' : base}/.ftporter-write-test-${process.pid}`;
 		try {
@@ -279,7 +283,7 @@ function initConfig(opts) {
 	}
 	fs.writeFileSync(file, CONFIG_TEMPLATE);
 	console.log(`${color.green}✓${color.reset} wrote ${file}`);
-	console.log(`${color.dim}  Edit the sftp block, then run: ftporter test${color.reset}`);
+	console.log(`${color.dim}  Edit the server block, then run: ftporter test${color.reset}`);
 	console.log(`${color.dim}  Add it to .gitignore if it ends up holding a password.${color.reset}`);
 	return 0;
 }
@@ -287,10 +291,10 @@ function initConfig(opts) {
 function printConfig(config) {
 	const redacted = {
 		...config,
-		sftp: {
-			...config.sftp,
-			password: config.sftp.password ? '***' : null,
-			passphrase: config.sftp.passphrase ? '***' : null,
+		connection: {
+			...config.connection,
+			password: config.connection.password ? '***' : null,
+			passphrase: config.connection.passphrase ? '***' : null,
 		},
 	};
 	delete redacted.profiles;

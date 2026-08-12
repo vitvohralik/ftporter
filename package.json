@@ -1,6 +1,6 @@
 {
   "name": "ftporter",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Your files' porter — SFTP deploy, watcher and interval patrol.",
   "type": "module",
   "license": "MIT",
@@ -10,6 +10,8 @@
   "author": "Vít Vohralík",
   "keywords": [
     "sftp",
+    "ftp",
+    "ftps",
     "sync",
     "deploy",
     "upload",
@@ -17,7 +19,7 @@
     "watcher",
     "mirror",
     "ssh2",
-    "phpstorm",
+    "vscode",
     "deployment"
   ],
   "bin": {
@@ -37,6 +39,7 @@
     "schema",
     "ftporter.config.example.jsonc",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -45,6 +48,7 @@
     "prepublishOnly": "npm test"
   },
   "dependencies": {
+    "basic-ftp": "^6.2.0",
     "chokidar": "^4.0.3",
     "ssh2": "^1.17.0"
   }

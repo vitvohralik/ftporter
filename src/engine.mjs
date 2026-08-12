@@ -2,7 +2,7 @@ import { color } from './logger.mjs';
 import { DEFAULT_IGNORED } from './config.mjs';
 import { matcher } from './match.mjs';
 import { ignoredByGit, scanLocal } from './scan.mjs';
-import { SFTP_NO_SUCH_FILE, TEMP_PREFIX } from './sftp.mjs';
+import { NO_SUCH_FILE, TEMP_PREFIX } from './session.mjs';
 import { loadManifest, saveManifest, updateManifest } from './state.mjs';
 import { dirsOf, mapLimit, parentOf, secs, UserError } from './util.mjs';
 
@@ -26,7 +26,7 @@ export async function scanRemote(session, config, logger, dirs) {
 		try {
 			list = await session.readdir(dir);
 		} catch (err) {
-			if (err.code === SFTP_NO_SUCH_FILE) return; // not created on the server yet
+			if (err.code === NO_SUCH_FILE) return; // not created on the server yet
 			throw err;
 		} finally {
 			done += 1;
@@ -34,11 +34,11 @@ export async function scanRemote(session, config, logger, dirs) {
 		}
 		existing.add(dir);
 		for (const item of list) {
-			entries.set(dir ? `${dir}/${item.filename}` : item.filename, {
-				dir: item.longname.startsWith('d'),
-				link: item.longname.startsWith('l'),
-				size: item.attrs.size,
-				mtime: item.attrs.mtime * 1000,
+			entries.set(dir ? `${dir}/${item.name}` : item.name, {
+				dir: item.dir,
+				link: item.link,
+				size: item.size,
+				mtime: item.mtime,
 			});
 		}
 	});
@@ -185,9 +185,12 @@ export async function upload(session, config, logger, rels, local, knownDirs, re
 		else if (done % 100 === 0 || done === rels.length) logger.dim(`  ↑ [${done}/${rels.length}] ${rel}`);
 	});
 
-	if (unstamped.length) {
+	// A session that cannot keep timestamps at all (an FTP server without MFMT/MLSD) says so once
+	// when it connects; repeating it for every file of every run would be noise.
+	if (unstamped.length && session.canStamp !== false) {
 		logger.warn(
-			`${unstamped.length}x could not set mtime (file owned by another user) — those are compared against the manifest from now on`,
+			`${unstamped.length}x could not set mtime${session.protocol === 'sftp' ? ' (file owned by another user)' : ''}` +
+				' — those are compared against the manifest from now on',
 		);
 	}
 	return { failed, unstamped };
@@ -458,9 +461,9 @@ async function walkRemote(session, config, logger, { everywhere = false, from = 
 			for (const item of list) {
 				// Symlinks are never followed nor offered for deletion — they routinely point at data
 				// stores outside the synchronised root.
-				if (item.longname.startsWith('l')) continue;
-				const rel = dir ? `${dir}/${item.filename}` : item.filename;
-				if (!isExcluded(rel)) found.set(rel, item.longname.startsWith('d'));
+				if (item.link) continue;
+				const rel = dir ? `${dir}/${item.name}` : item.name;
+				if (!isExcluded(rel)) found.set(rel, item.dir);
 			}
 		});
 

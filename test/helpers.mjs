@@ -6,13 +6,19 @@ import path from 'node:path';
 
 import { loadConfig } from '../src/config.mjs';
 import { silentLogger } from '../src/logger.mjs';
-import { SftpSession } from '../src/sftp.mjs';
+import { openSession } from '../src/session.mjs';
+import { startFtpServer } from './ftp-server.mjs';
 import { startSftpServer } from './sftp-server.mjs';
 
 export const logger = silentLogger();
 
-/** A temporary project, a temporary "server" and a config wired between the two. */
-export async function makeFixture({ files = {}, config = {}, noTimestampPaths = [] } = {}) {
+/**
+ * A temporary project, a temporary "server" and a config wired between the two.
+ *
+ * `protocol` picks which server gets started and which block the config uses, so the same test can
+ * be run over SFTP and over FTP; `server` is passed on to it (which features it supports).
+ */
+export async function makeFixture({ files = {}, config = {}, noTimestampPaths = [], protocol = 'sftp', server: serverOptions = {} } = {}) {
 	const base = await mkdtemp(path.join(tmpdir(), 'ftporter-test-'));
 	const local = path.join(base, 'project');
 	const remote = path.join(base, 'server');
@@ -20,7 +26,15 @@ export async function makeFixture({ files = {}, config = {}, noTimestampPaths = 
 
 	for (const [rel, content] of Object.entries(files)) writeFile(local, rel, content);
 
-	const server = await startSftpServer({ root: remote, noTimestampPaths });
+	const server =
+		protocol === 'sftp'
+			? await startSftpServer({ root: remote, noTimestampPaths })
+			: await startFtpServer({
+					root: remote,
+					tls: protocol === 'ftps',
+					implicit: protocol === 'ftps-implicit',
+					...serverOptions,
+				});
 
 	const configFile = path.join(local, 'ftporter.config.json');
 	fs.writeFileSync(
@@ -29,12 +43,15 @@ export async function makeFixture({ files = {}, config = {}, noTimestampPaths = 
 			root: '.',
 			stateFile: path.join(base, 'state.json'),
 			exclude: ['ftporter.config.json'],
-			sftp: {
+			// One block at every level, with the protocol inside it.
+			server: {
+				protocol,
 				host: '127.0.0.1',
 				port: server.port,
 				username: 'tester',
 				password: 'secret',
 				remoteRoot: '/site',
+				...(protocol === 'sftp' ? {} : { rejectUnauthorized: false }),
 			},
 			...config,
 		}),
@@ -46,7 +63,7 @@ export async function makeFixture({ files = {}, config = {}, noTimestampPaths = 
 	let session;
 	try {
 		resolved = await loadConfig({ config: configFile }, { cwd: local, env: {} });
-		session = await SftpSession.open(resolved, logger);
+		session = await openSession(resolved, logger);
 	} catch (err) {
 		await server.close();
 		await rm(base, { recursive: true, force: true });
@@ -55,6 +72,7 @@ export async function makeFixture({ files = {}, config = {}, noTimestampPaths = 
 
 	return {
 		base,
+		server,
 		local,
 		remote: path.join(remote, 'site'),
 		config: resolved,

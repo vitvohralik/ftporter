@@ -10,7 +10,8 @@
 
 A porter carries the load *and* keeps an eye on the place. This one carries your project onto the
 server, watches it while you work, and does its rounds on a timer to make sure nothing was missed.
-Install it once, drop a config file into any project, and run it from that directory.
+It speaks SFTP, FTPS and FTP, and behaves the same over all three. Install it once, drop a config
+file into any project, and run it from that directory.
 
 ```bash
 npm install -g ftporter
@@ -34,8 +35,11 @@ ftporter watch     # upload on every save
 - **VS Code has no real deployment** — the extensions out there either upload everything or make you
   pick files by hand. None of them diff against the server. ftporter uploads only what actually
   changed, automatically.
-- **Faster than PhpStorm's native deployment.** Parallel SFTP, directory-level scanning and
+- **Faster than PhpStorm's native deployment.** Parallel transfers, directory-level scanning and
   mtime-based diffing make it noticeably quicker, even on large projects with thousands of files.
+- **SFTP, FTPS or FTP, same tool.** Shared hosting rarely offers SSH. One `"protocol"` key switches
+  the wire format and nothing else changes — the same diff, the same safe deletion, the same
+  `watch`, the same `prune`.
 - **Dead simple to use.** One config file, one command. `ftporter watch` uploads on every save;
   `ftporter` does a one-shot sync. No plugins, no GUI, no surprises.
 - **Editor-agnostic.** Works the same whether you use VS Code, PhpStorm, Neovim, Zed or anything
@@ -47,8 +51,9 @@ ftporter watch     # upload on every save
 ## Design principles
 
 Editor deployment (PhpStorm and friends) keeps a local log of what it uploaded and drifts the moment
-anything happens outside the editor. `rsync` is not an option on a host that only speaks SFTP.
-Everything else either uploads the whole tree every time or needs the file list maintained by hand.
+anything happens outside the editor. `rsync` is not an option on a host that only speaks SFTP or
+FTP. Everything else either uploads the whole tree every time or needs the file list maintained by
+hand.
 
 - **It decides what to upload from the live server state**, never from a local log. Size plus mtime,
   compared against the server on every run — so a run after a crash, a reboot or a week away closes
@@ -112,7 +117,8 @@ crypto in Node, which costs some throughput on large transfers and nothing else;
 network is the bottleneck anyway.
 
 If you do want the acceleration, `npm approve-scripts ssh2 cpu-features` and reinstall. It needs a
-working `node-gyp` toolchain, and if the build fails ssh2 quietly falls back again.
+working `node-gyp` toolchain, and if the build fails ssh2 quietly falls back again. An FTP or FTPS
+target never loads ssh2 at all.
 
 ## Quick start
 
@@ -126,7 +132,8 @@ That writes `ftporter.config.jsonc`. Fill in the connection:
 ```jsonc
 {
   "root": ".",
-  "sftp": {
+  "server": {
+    "protocol": "sftp",
     "host": "example.com",
     "username": "deploy",
     "remoteRoot": "/var/www/example",
@@ -134,6 +141,18 @@ That writes `ftporter.config.jsonc`. Fill in the connection:
   },
   "strategy": "git",
   "exclude": [".env", "*.log"]
+}
+```
+
+On shared hosting, where there is no SSH, the only difference is the protocol and a password:
+
+```jsonc
+"server": {
+  "protocol": "ftps",
+  "host": "ftp.example.com",
+  "username": "web123",
+  "password": "${FTP_PASSWORD}",
+  "remoteRoot": "/www"
 }
 ```
 
@@ -187,13 +206,14 @@ disappears. Piped into a file or CI, the status line is not printed at all.
 | `-w, --watch` | Same as the `watch` command |
 | `-i, --interval <time>` | Full pass every `30s` / `5m` / `1h` |
 | `--strategy <name>` | `git`, `whitelist` or `blacklist` |
+| `--protocol <name>` | `sftp`, `ftps`, `ftp` or `ftps-implicit`, for one run |
 | `--include <glob>` | Extra path to upload (repeatable, added to the config) |
 | `--exclude <glob>` | Extra path to skip (repeatable, wins over include) |
 | `--no-delete` | Upload only, never delete |
 | `--no-atomic` | Write straight onto the target instead of renaming a temp file into place |
 | `--temp` | With `prune`: only `.ftporter-tmp.*` leftovers, ignoring `pruneSkip` and .gitignore |
 | `-f, --force` | Allow a delete count over the cap; confirm `prune` |
-| `--host` `--user` `--port` `--remote-root` `--key` | Override the connection for one run |
+| `--host` `--user` `--port` `--remote-root` `--key` `--password` | Override the connection for one run |
 | `-v, --verbose` / `-q, --quiet` / `--json` | Output control |
 
 `--json` prints a machine-readable summary (`{ ok, uploaded, deleted, uploads, deletes, ms }`) and
@@ -227,19 +247,63 @@ once, and [`schema/ftporter.schema.json`](schema/ftporter.schema.json) for edito
 
 ### Connection
 
+Everything about where the files go lives in one block, `"server"`, at every level of the config —
+the file, a target, a profile. `"protocol"` inside it picks the wire format:
+
 ```jsonc
-"sftp": {
+"server": {
+  "protocol": "sftp",                     // sftp | ftps | ftp | ftps-implicit
   "host": "example.com",
-  "port": 22,
+  "port": 22,                             // optional: the protocol's own port is the default
   "username": "deploy",
   "remoteRoot": "/var/www/example",
 
+  // SFTP authentication
   "privateKey": "~/.ssh/id_rsa",          // passphrase-free, or set "passphrase"
   "passphrase": "${SSH_KEY_PASSPHRASE}",
-  "password": "${DEPLOY_PASSWORD}",       // password auth instead
-  "agent": "${SSH_AUTH_SOCK}"             // or let a running ssh-agent answer
+  "password": "${DEPLOY_PASSWORD}",       // password auth instead — and what FTP/FTPS use
+  "agent": "${SSH_AUTH_SOCK}",            // or let a running ssh-agent answer
+
+  // FTP and FTPS only
+  "rejectUnauthorized": true,             // false accepts a self-signed server certificate
+  "connections": 4                        // parallel control connections
 }
 ```
+
+> **Upgrading from 1.x:** the block used to be named after the protocol (`"sftp"`, `"ftps"`,
+> `"ftp"`). Those names are refused now — rename the block to `"server"` and move the protocol
+> inside it. ftporter says exactly that, naming the level it found the old block on.
+
+### Protocols
+
+| | |
+| --- | --- |
+| `"sftp"` *(default)* | File transfer over SSH, port 22. Key, password or ssh-agent authentication. |
+| `"ftps"` | FTP with explicit TLS, **required**: a server that will not do `AUTH TLS` is an error rather than a silent downgrade. Port 21. |
+| `"ftp"` | Plain FTP that still upgrades to TLS whenever the server offers it, and warns once when it cannot. Port 21. |
+| `"ftps-implicit"` | Legacy FTPS, encrypted from the first byte. Port 990. |
+
+Either way the TLS upgrade happens *before* the password goes over the wire. `"ftpes"`, `"ftp-tls"`
+and `"ftps-explicit"` are accepted as spellings of `"ftps"`.
+
+**A target may use a different protocol than the base** — keyed SFTP for staging, FTPS on shared
+hosting is the common pair. What belonged to the protocol it left behind is not carried over: the
+port falls back to the new one's, and `privateKey`, `passphrase` and `agent` are dropped. Host,
+username, remote root and password always carry. Naming an SSH key *and* an FTP protocol in the
+same block stays an error — there the key really was meant for that connection.
+
+Everything else works the same over all four: the strategies, the diff against live server state,
+atomic uploads, manifest-bounded deletion, `prune`, `watch` and `patrol`. What FTP cannot do, it
+says once and works around:
+
+- **Timestamps** need `MFMT` to set and `MLSD` to read back. A server missing either is announced
+  when it connects, and the comparison falls back to the manifest — exact from the second run on.
+- **`chmod`** needs `SITE CHMOD`, which many servers do not have. The first refusal is reported and
+  `"chmod"` is ignored from then on.
+- **Renaming over an existing file** is not defined by FTP, so an atomic upload deletes the target
+  first — the same brief window SFTP has on servers without `posix-rename`.
+- FTP carries **one command per connection**, so the session opens a small pool of them
+  (`"connections"`, 4 by default). Servers commonly cap how many an account may open.
 
 Any string in the config can read the environment: `${VAR}`, or `${VAR:-fallback}`. Keep secrets
 out of the file that way and the config is safe to commit. (`ftporter` never uploads its own config
@@ -248,7 +312,7 @@ file, whatever the strategy says.)
 Environment overrides for a one-off run, no editing required: `FTPORTER_HOST`, `FTPORTER_USER`,
 `FTPORTER_PORT`, `FTPORTER_REMOTE_ROOT`, `FTPORTER_KEY`, `FTPORTER_PASSWORD`,
 `FTPORTER_PASSPHRASE`, `FTPORTER_AGENT`, `FTPORTER_ROOT`, `FTPORTER_STRATEGY`,
-`FTPORTER_TARGET`, `FTPORTER_CONFIG`.
+`FTPORTER_PROTOCOL`, `FTPORTER_TARGET`, `FTPORTER_CONFIG`.
 
 ### What gets uploaded
 
@@ -311,8 +375,11 @@ settings above, and a target can define its own profiles.
   "assets": { "strategy": "whitelist", "include": ["public/build", "public/css"], "deleteCap": 500 }
 },
 "targets": {
-  "staging": { "sftp": { "host": "staging.example.com", "remoteRoot": "/var/www/staging" } },
-  "prod":    { "sftp": { "host": "prod.example.com",    "remoteRoot": "/var/www/prod" }, "delete": false }
+  "staging": { "server": { "host": "staging.example.com", "remoteRoot": "/var/www/staging" } },
+  "prod":    { "server": { "host": "prod.example.com",    "remoteRoot": "/var/www/prod" }, "delete": false },
+  // A target may use a different protocol than the base — shared hosting rarely offers SSH.
+  "shared":  { "server": { "protocol": "ftps", "host": "ftp.example.com", "username": "web123",
+                           "password": "${FTP_PASSWORD}", "remoteRoot": "/www" } }
 }
 ```
 
@@ -339,9 +406,9 @@ Precedence, lowest first: **defaults → config file → target → profile → 
 ```
 
 A hook is a command, an array of commands, or a function in a `.js` config. They run in the project
-root with the outcome in the environment (`FTPORTER_UPLOADED`, `FTPORTER_DELETED`,
-`FTPORTER_TARGET`, `FTPORTER_PROFILE`, `FTPORTER_ROOT`). A failing `beforeSync` aborts the run;
-the others only warn.
+root with the run and its outcome in the environment (`FTPORTER_TARGET`, `FTPORTER_PROTOCOL`,
+`FTPORTER_PROFILE`, `FTPORTER_ROOT`, `FTPORTER_UPLOADED`, `FTPORTER_DELETED`, `FTPORTER_ERROR`).
+A failing `beforeSync` aborts the run; the others only warn.
 
 ### Everything else
 
@@ -392,8 +459,8 @@ Reasons to turn it off anyway:
    mtime by more than the tolerance — or when the manifest's millisecond timestamp says it changed
    locally since the last upload. That last check catches the case a second-resolution server clock
    cannot: an edit that keeps the file size and lands inside the same second.
-4. **Upload, then stamp** the remote mtime from the local one (`utimes`). This is what makes the
-   steady state exact and recoverable.
+4. **Upload, then stamp** the remote mtime from the local one (`utimes` over SFTP, `MFMT` over
+   FTP). This is what makes the steady state exact and recoverable.
 5. **Delete** what the manifest owns and the local side no longer has, then remove empty directories.
 6. **Write the manifest** — failed uploads excluded, since they are not on the server in a shape we
    know and must not become deletable.
@@ -403,13 +470,17 @@ still work, but the kernel refuses `utimes`, so their remote mtime stays at uplo
 make them look changed forever. Those are recorded as `unstamped` and compared against the manifest
 instead — reported as `13x could not set mtime (file owned by another user)`.
 
+**Servers that keep no timestamps at all.** An FTP server without `MFMT` or `MLSD` says so when it
+connects, and everything is compared against the manifest instead. Step 3 has nothing to work with
+on the first run there, so that one pass uploads everything; from the second on it is exact again.
+
 ### Atomic uploads in detail
 
 Where the server offers OpenSSH's `posix-rename@openssh.com` extension, replacing the file is a
-single atomic operation. Everywhere else the fallback is unlink-then-rename, which leaves a
-millisecond-wide window where the file is missing rather than incomplete — still far better than
-writing over a live one. A file the scan did not find on the server skips the unlink entirely, which
-is the bulk-import case.
+single atomic operation. Everywhere else — every FTP server, and any SFTP server without the
+extension — the fallback is unlink-then-rename, which leaves a millisecond-wide window where the
+file is missing rather than incomplete: still far better than writing over a live one. A file the
+scan did not find on the server skips the unlink entirely, which is the bulk-import case.
 
 The temporary file is per file, not per tree: it lives for the length of one transfer and is renamed
 the moment that file is complete. A whole `vendor/` is never duplicated — the extra space at any
@@ -498,8 +569,12 @@ console.log(result.uploads);
 ```
 
 Every entry point takes the same options as the CLI flags in camelCase and resolves the config the
-same way. `loadConfig`, `scanLocal`, `diff`, `reconcile` and `SftpSession` are exported too, if you
-want to build something else on top.
+same way — `sync`, `watch`, `patrol` and `prune`.
+
+The pieces underneath are exported too: `loadConfig`, `findConfigFile`, `scanLocal`, `scanRemote`,
+`diff`, `reconcile`, `reconcilePaths`, `matcher`, `UserError`, and the sessions — `openSession`,
+plus `SftpSession` and `FtpSession`. Both sessions expose the same operations over the same shapes,
+so code written against one works against the other; `src/session.mjs` states the contract.
 
 ## Troubleshooting
 
@@ -511,6 +586,12 @@ want to build something else on top.
 | Nothing is detected in watch mode | Filesystem events are not arriving (network share, container). Set `"watch": { "usePolling": true }`, or use `patrol`. |
 | `N files would be deleted (cap 50)` | Check the printed list. Wrong directory or a broken git state is the usual cause; `--force` if it is right. |
 | Deleted the state file | Nothing breaks. The next run rebuilds it; deletion is unavailable until then. |
+| `uses the 1.x connection block "sftp"` | The connection block is called `"server"` since 2.0, with `"protocol"` inside it. The message names the level the old block sits on. |
+| `The server did not accept AUTH TLS` | It cannot do explicit FTPS. Use `"protocol": "ftp"` to allow an unencrypted session, or `"ftps-implicit"` for a legacy TLS-only server on port 990. |
+| The TLS certificate was rejected | Self-signed certificates are common on small hosts: `"rejectUnauthorized": false`. |
+| `server does not offer TLS — this connection is unencrypted` | Under `"protocol": "ftp"`, said once per session. `"protocol": "ftps"` refuses to run at all rather than sending the password in the clear. |
+| `server cannot set modification times` | The FTP server has no `MFMT`, or no `MLSD` to read them back. Nothing to fix — the manifest takes over after the first pass. |
+| `server rejected SITE CHMOD` | That server has no `chmod`. The setting is ignored from then on. |
 
 ## Development
 
@@ -519,85 +600,19 @@ npm install
 npm test
 ```
 
-The test suite runs against a real in-process SFTP server backed by a temporary directory
-(`test/sftp-server.mjs`), so the actual ssh2 transport, concurrency, timestamps and error codes are
-exercised end to end without anyone owning a server.
+The test suite runs against real in-process servers backed by a temporary directory — SFTP
+(`test/sftp-server.mjs`) and FTP/FTPS (`test/ftp-server.mjs`, with a self-signed localhost
+certificate) — so the actual transports, concurrency, timestamps and error codes are exercised end
+to end without anyone owning a server. The FTP server can be started without `MFMT` or without
+`MLSD`, which is how the fallback to the manifest is tested.
 
 ---
 
 ## Changelog
 
-### 1.2.0
+Every release, with what changed and why: [CHANGELOG.md](CHANGELOG.md).
 
-- **Atomic uploads**, on by default. A file is uploaded to a temporary name next to the target,
-  given its mode and mtime, and renamed into place — using OpenSSH's `posix-rename@openssh.com`
-  where the server has it, unlink-then-rename everywhere else. An interrupted run can no longer
-  leave a truncated file live on the server, and several instances may now run side by side even
-  when they cover the same files. Set `"atomicUpload": false` for the old behaviour.
-- **The state file is written atomically and under a lock**, so instances sharing a project no
-  longer risk losing each other's manifest section or reading a half-written file.
-- **`--no-atomic`** turns the temporary file off for a single run, for bulk imports where nothing is
-  reading the server yet.
-- **`ftporter prune --temp`** clears leftovers from interrupted uploads. It walks past `pruneSkip`
-  and .gitignore — so it also reaches inside `vendor` and `node_modules` — and removes nothing but
-  ftporter's own `.ftporter-tmp.*` files.
-- **`prune` now looks exactly where the strategy uploads, and nowhere else.** It used to walk the
-  whole server whatever profile was running, so `-p vendor` reported the entire rest of the site as
-  orphaned — one `--force` away from deleting it. A whitelist profile is now walked inside its own
-  directories, and `pruneSkip` no longer hides `node_modules` and `vendor` from a run that uploads
-  them: what `.gitignore` and `exclude` already keep out of scope was doing that job anyway.
-- **A repeated `-p`/`-t`/`--root` is now an error** instead of quietly keeping the last one.
-- **Fixed `/node_modules` and `**/node_modules` matching nothing** in `include`, `exclude` and
-  `watch.ignored`. Both are everyday .gitignore spellings, and a pattern that silently matches
-  nothing is the worst way for an exclude to be wrong.
-
-### 1.1.0
-
-First release published to npm — `npm install -g ftporter`, or `npx ftporter` without installing.
-
-- `engines.node` raised to `>=20`, matching what CI actually tests since 1.0.1. Node 18 has been
-  end of life since April 2025. npm only warns (`EBADENGINE`) rather than refusing to install, so
-  an existing Node 18 setup will most likely keep working — it is simply no longer tested.
-
-### 1.0.2
-
-- Fixed output printing on top of the live status line: the top-level error handler (for example
-  `  connecting…ftporter: cannot connect to …` when the handshake times out), anything a function
-  hook prints, and the `^C` the shell echoes when a watch is interrupted.
-
-### 1.0.1
-
-- Dropped Node 18 from CI (EOL since April 2025); matrix now tests 20, 22, 24.
-
-### 1.0.0
-
-First public release. Grew out of a personal script that replaced PhpStorm's SFTP deployment, now
-generalised so nothing about it is project-specific.
-
-- **Configuration file** — `ftporter.config.jsonc` / `.json` / `.js`, discovered from the working
-  directory upwards, with `${ENV}` interpolation, a JSON schema and `ftporter init`.
-- **Install once, run anywhere.** A global install plus a config file in the project; the tool takes
-  its root from the config (default: the config file's directory), so it never has to live inside
-  the project.
-- **Three file-selection strategies** — `git` (default), `whitelist`, `blacklist` — with `include`
-  and `exclude` overriding all three, exclude always winning. Gitignore-style pattern matching:
-  anchored when a pattern has a slash, floating when it does not, `**`, and `!` exceptions.
-- **Profiles and targets.** Named config variants and named servers, combinable, each pair with its
-  own manifest.
-- **`watch`** — filesystem events, debounced, comparing only the touched paths, opening with a full
-  pass that the watcher already covers.
-- **`patrol`** — a full pass on an interval, for anywhere filesystem events are unreliable.
-  `watch --interval` combines the two.
-- **Safe deletion** — manifest-bounded, remote-state verified, capped, with `--no-delete` and
-  `prune` for the files that predate the tool.
-- **Hooks** — `beforeSync`, `afterSync`, `onError`, with the outcome exposed as environment
-  variables.
-- **`test`, `status`, `config` commands**, `--json` output, `--dry-run`, per-run connection
-  overrides, `chmod`, `preserveTimestamps`, configurable concurrency.
-- **Automatic reconnection** — a dropped connection is re-established on the next operation, so
-  long-running `watch` and `patrol` sessions survive idle timeouts and network blips.
-- **57 tests** against a real in-process SFTP server.
-
+---
 ## License
 
 MIT

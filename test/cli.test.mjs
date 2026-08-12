@@ -81,6 +81,25 @@ describe('cli', () => {
 		assert.match(again.stdout, /up to date/);
 	});
 
+	it('syncs over FTPS end to end, from the binary', async () => {
+		const fx = await makeFixture({
+			protocol: 'ftps',
+			files: { 'a.txt': 'a', 'sub/b.txt': 'b' },
+			config: { strategy: 'blacklist' },
+		});
+		after(() => fx.cleanup());
+		fx.session.end();
+
+		const test = await cli(['test'], { cwd: fx.local });
+		assert.equal(test.code, 0, test.stderr);
+		assert.match(test.stdout, /connected to ftps:\/\//);
+
+		const result = await cli(['--json'], { cwd: fx.local });
+		assert.equal(result.code, 0, result.stderr);
+		assert.equal(JSON.parse(result.stdout).uploaded, 2);
+		assert.deepEqual(fx.remoteList(), ['a.txt', 'sub/b.txt']);
+	});
+
 	it('checks a connection with the test command', async () => {
 		const fx = await makeFixture({ files: { 'a.txt': 'a' }, config: { strategy: 'blacklist' } });
 		after(() => fx.cleanup());
@@ -99,7 +118,8 @@ describe('cli', () => {
 
 		const result = await cli(['config'], { cwd: fx.local });
 		const printed = JSON.parse(result.stdout);
-		assert.equal(printed.sftp.password, '***');
+		assert.equal(printed.connection.password, '***');
+		assert.equal(printed.protocol, 'sftp');
 		assert.equal(printed.strategy, 'blacklist');
 	});
 

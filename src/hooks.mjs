@@ -6,9 +6,10 @@ import { UserError } from './util.mjs';
  * Shell commands run around a sync — build before uploading, clear a cache after, notify on error.
  * A hook may be a string, an array of strings (run in order), or a function in a JS config.
  *
- * The command runs in the project root with the outcome exposed as environment variables
- * (FTPORTER_UPLOADED, FTPORTER_DELETED, FTPORTER_TARGET, FTPORTER_PROFILE), so a hook can react
- * to what actually happened. A failing `beforeSync` aborts the run; the others only warn.
+ * The command runs in the project root with the run and its outcome exposed as environment
+ * variables (FTPORTER_TARGET, FTPORTER_PROTOCOL, FTPORTER_PROFILE, FTPORTER_ROOT,
+ * FTPORTER_UPLOADED, FTPORTER_DELETED, FTPORTER_ERROR), so a hook can react to what actually
+ * happened. A failing `beforeSync` aborts the run; the others only warn.
  */
 export async function runHook(name, config, logger, context = {}) {
 	const hook = config.hooks?.[name];
@@ -17,6 +18,7 @@ export async function runHook(name, config, logger, context = {}) {
 	const env = {
 		...process.env,
 		FTPORTER_TARGET: config.target,
+		FTPORTER_PROTOCOL: config.protocol,
 		FTPORTER_PROFILE: config.profileName,
 		FTPORTER_ROOT: config.root,
 		FTPORTER_UPLOADED: String(context.uploaded ?? 0),

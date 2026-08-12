@@ -1,24 +1,36 @@
 {
-  // Full reference — every key with its default. Copy the parts you need; only "sftp" is required.
-  // `ftporter init` writes a much shorter starter version of this file.
+  // Full reference — every key with its default. Copy the parts you need; only the connection
+  // block is required. `ftporter init` writes a much shorter starter version of this file.
   "$schema": "./schema/ftporter.schema.json",
 
   "root": ".", // project directory to upload, relative to this file
   "strategy": "git", // git | whitelist | blacklist
 
-  "sftp": {
+  // The "server" block defines how ftporter connects. The "protocol" field picks the wire format:
+  //   "sftp"  — over SSH, port 22                                                  [default]
+  //   "ftps"  — FTP with explicit TLS, required: no TLS means the run stops, port 21
+  //   "ftp"   — FTP that upgrades to TLS when the server offers it, plain when it does not
+  //   "ftps-implicit" — legacy FTPS that is encrypted from the first byte, usually on port 990.
+
+  "server": {
+    "protocol": "sftp",
     "host": "example.com",
     "port": 22,
     "username": "deploy",
     "remoteRoot": "/var/www/example",
 
+    // SFTP authentication:
     "privateKey": "~/.ssh/id_rsa", // passphrase-free key, or add "passphrase"
     "passphrase": "${SSH_KEY_PASSPHRASE}", // read from the environment
-    "password": "${DEPLOY_PASSWORD}", // password auth instead of a key
+    "password": "${DEPLOY_PASSWORD}", // password auth instead of a key (FTP/FTPS use this one)
     "agent": "${SSH_AUTH_SOCK}", // or let a running ssh-agent answer
 
     "readyTimeout": 20000,
-    "keepaliveInterval": 10000
+    "keepaliveInterval": 10000,
+
+    // FTP and FTPS only:
+    "rejectUnauthorized": true, // false accepts a self-signed server certificate
+    "connections": 4 // parallel control connections; servers often cap how many you may open
   },
 
   // Applied on top of every strategy. Exclude always wins over include.
@@ -53,7 +65,8 @@
   },
 
   // Shell commands (or an array of them) run around a sync. beforeSync failing aborts the run.
-  // Environment: FTPORTER_UPLOADED, FTPORTER_DELETED, FTPORTER_TARGET, FTPORTER_PROFILE, FTPORTER_ROOT.
+  // Environment: FTPORTER_UPLOADED, FTPORTER_DELETED, FTPORTER_TARGET, FTPORTER_PROTOCOL,
+  // FTPORTER_PROFILE, FTPORTER_ROOT.
   "hooks": {
     "beforeSync": null,
     "afterSync": null,
@@ -81,12 +94,22 @@
   "defaultTarget": null,
   "targets": {
     "staging": {
-      "sftp": { "host": "staging.example.com", "remoteRoot": "/var/www/staging" }
+      "server": { "host": "staging.example.com", "remoteRoot": "/var/www/staging" }
     },
     "prod": {
-      "sftp": { "host": "prod.example.com", "remoteRoot": "/var/www/prod" },
+      "server": { "host": "prod.example.com", "remoteRoot": "/var/www/prod" },
       "delete": false,
       "hooks": { "afterSync": "curl -fsS https://example.com/deploy-hook" }
+    },
+    // A target may specify a different protocol than the base — shared hosting rarely offers SSH.
+    "shared": {
+      "server": {
+        "protocol": "ftps",
+        "host": "ftp.example.com",
+        "username": "web123",
+        "password": "${FTP_PASSWORD}",
+        "remoteRoot": "/www"
+      }
     }
   }
 }

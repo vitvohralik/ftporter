@@ -3,10 +3,12 @@ import path from 'node:path';
 
 import { Client } from 'ssh2';
 
+import { NO_SUCH_FILE, PERMISSION_DENIED, tempPath } from './session.mjs';
 import { UserError } from './util.mjs';
 
-export const SFTP_NO_SUCH_FILE = 2;
-export const SFTP_PERMISSION_DENIED = 3;
+export const SFTP_NO_SUCH_FILE = NO_SUCH_FILE;
+export const SFTP_PERMISSION_DENIED = PERMISSION_DENIED;
+export { TEMP_PREFIX } from './session.mjs';
 
 /**
  * A thin promise layer over ssh2.
@@ -23,7 +25,8 @@ export class SftpSession {
 	constructor(config, logger) {
 		this.config = config;
 		this.logger = logger;
-		this.remoteRoot = config.sftp.remoteRoot;
+		this.protocol = 'sftp';
+		this.remoteRoot = config.connection.remoteRoot;
 		this.conn = null;
 		this.sftp = null;
 		this.closing = false;
@@ -47,7 +50,7 @@ export class SftpSession {
 	}
 
 	async #doConnect() {
-		const { sftp: cfg, target } = this.config;
+		const { connection: cfg, target } = this.config;
 		const conn = new Client();
 
 		const options = {
@@ -122,7 +125,7 @@ export class SftpSession {
 	}
 
 	readdir(rel) {
-		return this.#call('readdir', this.remotePath(rel));
+		return this.readdirAbs(this.remotePath(rel));
 	}
 
 	/**
@@ -213,8 +216,20 @@ export class SftpSession {
 		return this.#call('mkdir', abs);
 	}
 
-	readdirAbs(abs) {
-		return this.#call('readdir', abs);
+	/**
+	 * Directory listing in the shape every session speaks: `{name, dir, link, size, mtime}` with the
+	 * mtime in milliseconds. FTP listings carry none of ssh2's `longname`, so the translation happens
+	 * here rather than in the engine.
+	 */
+	async readdirAbs(abs) {
+		const list = await this.#call('readdir', abs);
+		return list.map((item) => ({
+			name: item.filename,
+			dir: item.longname.startsWith('d'),
+			link: item.longname.startsWith('l'),
+			size: item.attrs.size,
+			mtime: item.attrs.mtime * 1000,
+		}));
 	}
 
 	rmdirAbs(abs) {
@@ -229,8 +244,10 @@ export class SftpSession {
 		return this.#call('unlink', this.remotePath(rel));
 	}
 
-	stat(rel) {
-		return this.#call('stat', this.remotePath(rel));
+	/** `{size, mtime}` with the mtime in milliseconds — ssh2 counts in seconds. */
+	async stat(rel) {
+		const stats = await this.#call('stat', this.remotePath(rel));
+		return { size: stats.size, mtime: stats.mtime * 1000 };
 	}
 
 	chmod(rel, mode) {
@@ -248,20 +265,6 @@ export class SftpSession {
 		this.conn = null;
 		this.sftp = null;
 	}
-}
-
-/**
- * A sibling of the target, so the rename stays within one filesystem and cannot degrade into a
- * copy. The pid and a random suffix keep concurrent instances — and repeated runs — apart.
- */
-export const TEMP_PREFIX = '.ftporter-tmp.';
-
-function tempPath(target) {
-	const slash = target.lastIndexOf('/');
-	const dir = slash === -1 ? '' : target.slice(0, slash + 1);
-	const base = target.slice(slash + 1);
-	const suffix = `${process.pid.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-	return `${dir}${TEMP_PREFIX}${base}.${suffix}`;
 }
 
 const isTransportError = (err) =>
