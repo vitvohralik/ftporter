@@ -6,3 +6,9 @@ ftporter.config.jsonc
 *.log
 .DS_Store
 *.tgz
+
+# Only the wordmarks the README embeds — npm needs a raw GitHub URL for them.
+# The rest of the brand kit lives with the presentation site.
+brand/*
+!brand/wordmark-light.png
+!brand/wordmark-dark.png

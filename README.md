@@ -1,4 +1,11 @@
-# FTPorter
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)"
+            srcset="https://raw.githubusercontent.com/vitvohralik/ftporter/main/brand/wordmark-dark.png">
+    <img src="https://raw.githubusercontent.com/vitvohralik/ftporter/main/brand/wordmark-light.png"
+         alt="FTPorter" width="280">
+  </picture>
+</p>
 
 [![npm](https://img.shields.io/npm/v/ftporter?logo=npm&color=cb3837)](https://www.npmjs.com/package/ftporter)
 [![test](https://github.com/vitvohralik/ftporter/actions/workflows/test.yml/badge.svg)](https://github.com/vitvohralik/ftporter/actions/workflows/test.yml)
